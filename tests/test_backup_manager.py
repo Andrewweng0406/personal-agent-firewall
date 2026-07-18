@@ -44,3 +44,32 @@ async def test_snapshot_of_missing_file_returns_none(tmp_path: Path):
 
     assert backup_id is None
     assert not (tmp_path / "backups").exists()
+
+
+async def test_restore_replaces_modified_file_and_updates_manifest(tmp_path: Path):
+    source = tmp_path / "src" / "index.html"
+    source.parent.mkdir(parents=True)
+    source.write_text("original")
+
+    audit_log = AuditLog(tmp_path / "audit.db")
+    await audit_log.init_db()
+    manager = BackupManager(tmp_path / "backups", audit_log)
+    backup_id = await manager.snapshot(str(source), request_id="req-restore")
+    source.write_text("modified")
+
+    restored = await manager.restore(backup_id)
+
+    assert restored is not None
+    assert restored["original_path"] == str(source)
+    assert source.read_text() == "original"
+    manifest = await audit_log.get_backup(backup_id)
+    assert manifest["restore_count"] == 1
+    assert manifest["last_restored_at"] is not None
+
+
+async def test_restore_unknown_backup_returns_none(tmp_path: Path):
+    audit_log = AuditLog(tmp_path / "audit.db")
+    await audit_log.init_db()
+    manager = BackupManager(tmp_path / "backups", audit_log)
+
+    assert await manager.restore("does-not-exist") is None

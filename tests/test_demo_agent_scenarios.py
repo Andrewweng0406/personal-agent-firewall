@@ -11,6 +11,7 @@ from app.gateway.router import GatewayState, build_router
 from app.risk.llm_translator import LlmRiskResult
 from app.state.audit_log import AuditLog
 from app.state.backup_manager import BackupManager
+from app.state.containment import ContainmentStore
 from mock_agent.demo_agent import (
     BENIGN_SCENARIO,
     dangerous_overwrite_scenario,
@@ -44,6 +45,8 @@ async def _build_app(tmp_path: Path):
     audit_log = AuditLog(tmp_path / "audit.db")
     await audit_log.init_db()
     backup_manager = BackupManager(tmp_path / "backups", audit_log)
+    containment_store = ContainmentStore(tmp_path / "audit.db")
+    await containment_store.init_db()
 
     settings = Settings(
         risk_threshold=70,
@@ -65,6 +68,7 @@ async def _build_app(tmp_path: Path):
         audit_log=audit_log,
         backup_manager=backup_manager,
         ws_manager=RecordingWsManager(),
+        containment_store=containment_store,
     )
     app = FastAPI()
     app.include_router(build_router(state))

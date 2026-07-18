@@ -12,12 +12,14 @@ from fastapi import APIRouter, HTTPException, Query
 from app.config import Settings
 from app.gateway import tool_executor
 from app.gateway.tool_executor import ToolExecutionError
-from app.models import DecisionRequest, ToolCallRequest, ToolCallResponse
+from app.models import ContainmentRequest, DecisionRequest, ToolCallRequest, ToolCallResponse
 from app.privacy.shield import scan_and_redact
+from app.risk.behavior_chain import analyze_behavior_chain
 from app.risk.engine import assess_risk
 from app.risk.llm_translator import RiskLlmClient
 from app.state.audit_log import AuditLog
 from app.state.backup_manager import BackupManager
+from app.state.containment import ContainmentStore
 from app.ws.manager import ConnectionManager
 
 
@@ -34,12 +36,14 @@ class GatewayState:
         audit_log: AuditLog,
         backup_manager: BackupManager,
         ws_manager: ConnectionManager,
+        containment_store: ContainmentStore,
     ) -> None:
         self.settings = settings
         self.llm_client = llm_client
         self.audit_log = audit_log
         self.backup_manager = backup_manager
         self.ws_manager = ws_manager
+        self.containment_store = containment_store
         self.pending: dict[str, PendingDecision] = {}
 
 
@@ -129,6 +133,27 @@ def build_router(state: GatewayState) -> APIRouter:
         sanitized_args, _ = scan_and_redact(request.args)
         sanitized_intent, _ = scan_and_redact(request.user_intent)
 
+        active_containment = await state.containment_store.get_active(
+            request.agent_id, request.session_id
+        )
+        if active_containment:
+            scope = active_containment["scope"]
+            reason = f"The {scope} is quarantined: {active_containment['reason']}"
+            await _log(
+                state, request_id, request.agent_id, request.session_id,
+                request.tool_name, sanitized_args, 100, "CRITICAL", "red", "off_scope",
+                sanitized_intent, [f"containment:{scope}_quarantined"],
+                "denied_quarantined", reason, None,
+            )
+            return ToolCallResponse(
+                status="denied",
+                reason=reason,
+                risk_score=100,
+                behavior_lane="red",
+                intent_alignment="off_scope",
+                containment_action=f"{scope}_quarantined",
+            )
+
         if settings.is_blocked_tool(request.tool_name):
             await _log(
                 state, request_id, request.agent_id, request.session_id,
@@ -141,6 +166,12 @@ def build_router(state: GatewayState) -> APIRouter:
                 behavior_lane="red", intent_alignment="off_scope",
             )
 
+        history = await state.audit_log.list_events(
+            request.agent_id, request.session_id, limit=20
+        )
+        behavior_signal = analyze_behavior_chain(
+            request.tool_name, sanitized_args, history
+        )
         assessment = await asyncio.to_thread(
             assess_risk,
             request.tool_name,
@@ -148,7 +179,69 @@ def build_router(state: GatewayState) -> APIRouter:
             settings,
             state.llm_client,
             sanitized_intent,
+            behavior_signal,
         )
+
+        if assessment.auto_contain:
+            containment = await state.containment_store.quarantine(
+                "session",
+                request.agent_id,
+                request.session_id,
+                assessment.plain_explanation,
+            )
+            await _log(
+                state, request_id, request.agent_id, request.session_id,
+                request.tool_name, sanitized_args, assessment.score, assessment.level,
+                assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                assessment.matched_rules, "denied_auto_contained",
+                assessment.plain_explanation, None,
+            )
+            alert = {
+                "type": "new_alert",
+                "request_id": request_id,
+                "agent_id": request.agent_id,
+                "session_id": request.session_id,
+                "user_intent": sanitized_intent,
+                "tool_name": request.tool_name,
+                "args_summary": sanitized_args,
+                "risk_score": assessment.score,
+                "risk_level": assessment.level,
+                "plain_explanation": assessment.plain_explanation,
+                "matched_rules": assessment.matched_rules,
+                "backup_id": None,
+                "behavior_lane": assessment.behavior_lane,
+                "intent_alignment": assessment.intent_alignment,
+                "chain_detected": True,
+                "auto_contained": True,
+                "containment": containment,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            await state.ws_manager.broadcast(alert)
+            await state.ws_manager.broadcast(
+                {
+                    "type": "containment_changed",
+                    "action": "quarantined",
+                    **containment,
+                }
+            )
+            await state.ws_manager.broadcast(
+                {
+                    "type": "resolved",
+                    "request_id": request_id,
+                    "agent_id": request.agent_id,
+                    "session_id": request.session_id,
+                    "decision": "denied_auto_contained",
+                }
+            )
+            return ToolCallResponse(
+                status="denied",
+                reason=assessment.plain_explanation,
+                risk_score=assessment.score,
+                behavior_lane="red",
+                intent_alignment="off_scope",
+                chain_detected=True,
+                containment_action="session_quarantined",
+            )
 
         if assessment.score < settings.risk_threshold:
             try:
@@ -174,6 +267,7 @@ def build_router(state: GatewayState) -> APIRouter:
                 risk_score=assessment.score,
                 behavior_lane=assessment.behavior_lane,
                 intent_alignment=assessment.intent_alignment,
+                chain_detected=assessment.chain_detected,
             )
 
         candidate_paths: list[str] = []
@@ -216,6 +310,8 @@ def build_router(state: GatewayState) -> APIRouter:
                 "backup_id": backup_id,
                 "behavior_lane": assessment.behavior_lane,
                 "intent_alignment": assessment.intent_alignment,
+                "chain_detected": assessment.chain_detected,
+                "auto_contained": False,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -258,6 +354,7 @@ def build_router(state: GatewayState) -> APIRouter:
                 risk_score=assessment.score,
                 behavior_lane=assessment.behavior_lane,
                 intent_alignment=assessment.intent_alignment,
+                chain_detected=assessment.chain_detected,
             )
             final_decision = "allowed"
         else:
@@ -272,6 +369,7 @@ def build_router(state: GatewayState) -> APIRouter:
                 risk_score=assessment.score,
                 behavior_lane=assessment.behavior_lane,
                 intent_alignment=assessment.intent_alignment,
+                chain_detected=assessment.chain_detected,
             )
             final_decision = "denied"
 
@@ -302,6 +400,52 @@ def build_router(state: GatewayState) -> APIRouter:
             pending.future.set_result(decision.decision)
         return {"ack": True}
 
+    @router.post("/api/containment/quarantine")
+    async def quarantine(request: ContainmentRequest) -> dict:
+        _validate_containment_request(request)
+        sanitized_reason, _ = scan_and_redact(request.reason)
+        containment = await state.containment_store.quarantine(
+            request.scope, request.agent_id, request.session_id, sanitized_reason
+        )
+        await state.ws_manager.broadcast(
+            {"type": "containment_changed", "action": "quarantined", **containment}
+        )
+        return {"containment": containment}
+
+    @router.post("/api/containment/release")
+    async def release_containment(request: ContainmentRequest) -> dict:
+        _validate_containment_request(request)
+        released = await state.containment_store.release(
+            request.scope, request.agent_id, request.session_id
+        )
+        if not released:
+            raise HTTPException(status_code=404, detail="Active containment not found")
+        event = {
+            "type": "containment_changed",
+            "action": "released",
+            "scope": request.scope,
+            "agent_id": request.agent_id,
+            "session_id": request.session_id,
+        }
+        await state.ws_manager.broadcast(event)
+        return {"released": True}
+
+    @router.get("/api/containment")
+    async def list_containment(
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict:
+        containments = await state.containment_store.list_active(agent_id, session_id)
+        return {"containments": containments, "count": len(containments)}
+
+    @router.post("/api/backups/{backup_id}/restore")
+    async def restore_backup(backup_id: str) -> dict:
+        restored = await state.backup_manager.restore(backup_id)
+        if restored is None:
+            raise HTTPException(status_code=404, detail="Restorable backup not found")
+        await state.ws_manager.broadcast({"type": "backup_restored", **restored})
+        return {"restored": True, **restored}
+
     @router.get("/api/events")
     async def list_events(
         agent_id: str | None = None,
@@ -316,6 +460,10 @@ def build_router(state: GatewayState) -> APIRouter:
             event["matched_rules"] = _decode_json(
                 event.pop("matched_rules_json"), []
             )
+            event["chain_detected"] = any(
+                rule.startswith("behavior_chain:")
+                for rule in event["matched_rules"]
+            )
             events.append(event)
         return {"events": events, "count": len(events)}
 
@@ -325,9 +473,22 @@ def build_router(state: GatewayState) -> APIRouter:
         session_id: str | None = None,
     ) -> dict:
         rows = await state.audit_log.list_events(agent_id, session_id)
-        return _build_dashboard_stats(rows)
+        stats = _build_dashboard_stats(rows)
+        active_containments = await state.containment_store.list_active(
+            agent_id, session_id
+        )
+        stats["active_containments"] = len(active_containments)
+        return stats
 
     return router
+
+
+def _validate_containment_request(request: ContainmentRequest) -> None:
+    if request.scope == "session" and not request.session_id:
+        raise HTTPException(
+            status_code=422,
+            detail="session_id is required when containment scope is session",
+        )
 
 
 def _decode_json(value: str, fallback):
@@ -342,7 +503,7 @@ def _increment(counter: dict[str, int], key: str) -> None:
 
 
 def _rule_type(rule: str) -> str:
-    if rule.startswith("intent:"):
+    if rule.startswith(("intent:", "behavior_chain:", "containment:")):
         return ":".join(rule.split(":", 2)[:2])
     return rule.split(":", 1)[0]
 
@@ -353,6 +514,8 @@ def _build_dashboard_stats(rows: list[dict]) -> dict:
     decision_counts: dict[str, int] = {}
     risk_type_counts: dict[str, int] = {}
     agents: dict[str, dict] = {}
+    chain_events = 0
+    auto_contained_events = 0
 
     for row in rows:
         lane = row.get("behavior_lane") or "yellow"
@@ -361,7 +524,11 @@ def _build_dashboard_stats(rows: list[dict]) -> dict:
         _increment(risk_level_counts, level)
         _increment(decision_counts, row.get("decision") or "unknown")
 
-        for rule in _decode_json(row.get("matched_rules_json", "[]"), []):
+        rules = _decode_json(row.get("matched_rules_json", "[]"), [])
+        has_chain = any(rule.startswith("behavior_chain:") for rule in rules)
+        chain_events += int(has_chain)
+        auto_contained_events += int(row.get("decision") == "denied_auto_contained")
+        for rule in rules:
             _increment(risk_type_counts, _rule_type(rule))
 
         current_agent = row.get("agent_id") or "unknown"
@@ -372,13 +539,17 @@ def _build_dashboard_stats(rows: list[dict]) -> dict:
                 "total_events": 0,
                 "red_events": 0,
                 "denied_events": 0,
+                "chain_events": 0,
                 "risk_score_total": 0,
                 "last_seen": row.get("created_at"),
             },
         )
         summary["total_events"] += 1
         summary["red_events"] += int(lane == "red")
-        summary["denied_events"] += int(row.get("decision") == "denied")
+        summary["denied_events"] += int(
+            str(row.get("decision", "")).startswith("denied")
+        )
+        summary["chain_events"] += int(has_chain)
         summary["risk_score_total"] += row.get("risk_score") or 0
 
     agent_summaries = []
@@ -399,6 +570,8 @@ def _build_dashboard_stats(rows: list[dict]) -> dict:
         "lane_counts": lane_counts,
         "risk_level_counts": risk_level_counts,
         "decision_counts": decision_counts,
+        "chain_events": chain_events,
+        "auto_contained_events": auto_contained_events,
         "risk_type_counts": risk_types,
         "agents": agent_summaries,
     }

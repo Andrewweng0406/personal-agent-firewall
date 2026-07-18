@@ -9,6 +9,7 @@ from app.gateway.router import GatewayState, build_router
 from app.risk.llm_translator import ClaudeRiskClient
 from app.state.audit_log import AuditLog
 from app.state.backup_manager import BackupManager
+from app.state.containment import ContainmentStore
 from app.ws.manager import ConnectionManager
 
 settings = load_settings()
@@ -16,13 +17,17 @@ audit_log = AuditLog(settings.audit_db_path)
 backup_manager = BackupManager(settings.backup_dir, audit_log)
 llm_client = ClaudeRiskClient(api_key=settings.anthropic_api_key)
 ws_manager = ConnectionManager()
-gateway_state = GatewayState(settings, llm_client, audit_log, backup_manager, ws_manager)
+containment_store = ContainmentStore(settings.audit_db_path)
+gateway_state = GatewayState(
+    settings, llm_client, audit_log, backup_manager, ws_manager, containment_store
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.backup_dir.mkdir(parents=True, exist_ok=True)
     await audit_log.init_db()
+    await containment_store.init_db()
     yield
 
 

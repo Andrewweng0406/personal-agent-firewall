@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS backups (
     original_path TEXT NOT NULL,
     backup_path TEXT NOT NULL,
     request_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    restore_count INTEGER NOT NULL DEFAULT 0,
+    last_restored_at TEXT
 )
 """
 
@@ -45,6 +47,7 @@ class AuditLog:
             await db.execute(EVENTS_TABLE)
             await db.execute(BACKUPS_TABLE)
             await self._migrate_events_table(db)
+            await self._migrate_backups_table(db)
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_agent_created "
                 "ON events (agent_id, created_at DESC)"
@@ -69,6 +72,17 @@ class AuditLog:
         for column, definition in additions.items():
             if column not in existing:
                 await db.execute(f"ALTER TABLE events ADD COLUMN {column} {definition}")
+
+    async def _migrate_backups_table(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(backups)")
+        existing = {row[1] for row in await cursor.fetchall()}
+        additions = {
+            "restore_count": "INTEGER NOT NULL DEFAULT 0",
+            "last_restored_at": "TEXT",
+        }
+        for column, definition in additions.items():
+            if column not in existing:
+                await db.execute(f"ALTER TABLE backups ADD COLUMN {column} {definition}")
 
     async def log_event(
         self,
@@ -129,6 +143,24 @@ class AuditLog:
                 "(backup_id, original_path, backup_path, request_id, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (backup_id, original_path, backup_path, request_id, created_at),
+            )
+            await db.commit()
+
+    async def get_backup(self, backup_id: str) -> dict | None:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM backups WHERE backup_id = ?", (backup_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def mark_backup_restored(self, backup_id: str, restored_at: str) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "UPDATE backups SET restore_count = restore_count + 1, "
+                "last_restored_at = ? WHERE backup_id = ?",
+                (restored_at, backup_id),
             )
             await db.commit()
 

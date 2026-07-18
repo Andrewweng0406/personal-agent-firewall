@@ -1,8 +1,9 @@
 # Personal Agent Firewall
 
-A FastAPI backend that intercepts AI agent tool calls, screens them for
-privacy leaks and destructive risk, and holds high-risk actions for a
-human Allow/Deny decision before they execute.
+A FastAPI behavior firewall that detects when an AI agent drifts away from
+the user's intent. It correlates actions across a session, blocks dangerous
+behavior chains before execution, quarantines compromised agents, and can
+restore files from automatic snapshots.
 
 ## Setup
 
@@ -38,7 +39,22 @@ the pushed alert, then resolve it with:
       -H "Content-Type: application/json" \
       -d '{"decision": "allow"}'
 
+## Run the attack-chain demo
+
+With the server running, execute:
+
+    python -m mock_agent.attack_chain_demo
+
+The demo reproduces a prompt-injection sequence:
+
+1. An agent working on frontend styling reads `.env`.
+2. The reviewer allows the read so the sequence can continue.
+3. The agent attempts an external upload.
+4. The firewall correlates both actions, blocks the upload automatically,
+   and quarantines the session.
+5. A later benign action from the same session is also denied.
+
 ## API contract
 
-See `docs/superpowers/specs/2026-07-17-personal-agent-firewall-design.md`
-section 6 for the full REST/WebSocket contract used by the frontend.
+See `docs/frontend-api.md` for the full REST/WebSocket contract used by the
+frontend.

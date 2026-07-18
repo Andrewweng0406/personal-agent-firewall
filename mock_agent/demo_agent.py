@@ -10,6 +10,7 @@ BENIGN_SCENARIO = {
     "args": {"query": "how to center a div in css"},
     "agent_id": "demo-agent",
     "session_id": "demo-session-1",
+    "user_intent": "Update the frontend login page styling",
 }
 
 
@@ -23,6 +24,7 @@ def dangerous_overwrite_scenario(project_root: str) -> dict:
         },
         "agent_id": "demo-agent",
         "session_id": "demo-session-2",
+        "user_intent": "Update the frontend login page styling",
     }
 
 
@@ -40,6 +42,7 @@ def prompt_injection_scenario(project_root: str) -> dict:
         },
         "agent_id": "demo-agent",
         "session_id": "demo-session-3",
+        "user_intent": "Update the frontend login page styling",
     }
 
 

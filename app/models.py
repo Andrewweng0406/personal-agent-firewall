@@ -24,6 +24,8 @@ class ToolCallResponse(BaseModel):
     reason: str | None = None
     behavior_lane: BehaviorLane | None = None
     intent_alignment: IntentAlignment | None = None
+    chain_detected: bool = False
+    containment_action: str | None = None
 
 
 class RiskAssessment(BaseModel):
@@ -33,8 +35,17 @@ class RiskAssessment(BaseModel):
     matched_rules: list[str] = Field(default_factory=list)
     behavior_lane: BehaviorLane = "green"
     intent_alignment: IntentAlignment = "uncertain"
+    chain_detected: bool = False
+    auto_contain: bool = False
 
 
 class DecisionRequest(BaseModel):
     decision: Literal["allow", "deny"]
     reviewer: str | None = None
+
+
+class ContainmentRequest(BaseModel):
+    scope: Literal["agent", "session"]
+    agent_id: str
+    session_id: str | None = None
+    reason: str = "Manually quarantined by reviewer."

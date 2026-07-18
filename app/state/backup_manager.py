@@ -32,3 +32,25 @@ class BackupManager:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         return backup_id
+
+    async def restore(self, backup_id: str) -> dict | None:
+        manifest = await self._audit_log.get_backup(backup_id)
+        if manifest is None:
+            return None
+
+        backup_path = Path(manifest["backup_path"])
+        if not backup_path.is_file():
+            return None
+
+        original_path = Path(manifest["original_path"])
+        original_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup_path, original_path)
+
+        restored_at = datetime.now(timezone.utc).isoformat()
+        await self._audit_log.mark_backup_restored(backup_id, restored_at)
+        return {
+            "backup_id": backup_id,
+            "request_id": manifest["request_id"],
+            "original_path": str(original_path),
+            "restored_at": restored_at,
+        }

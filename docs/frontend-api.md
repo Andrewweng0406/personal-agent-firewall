@@ -14,12 +14,13 @@ If the backend is started on another port, replace `8000` with that port.
 
 ## Core Flow
 
-The frontend has four jobs:
+The frontend has five jobs:
 
 1. Send the user's task intent with tool calls when available.
 2. Listen for red-lane agent actions over WebSocket.
 3. Send an allow/deny decision back to the backend.
 4. Render historical activity and aggregate risk statistics by agent.
+5. Render containment and restore controls for incident response.
 
 High-level flow:
 
@@ -47,6 +48,14 @@ Frontend POSTs /api/decision/{request_id}
         |
         v
 Backend sends WebSocket resolved event
+
+Sensitive read followed by external upload
+        |
+        v
+Backend auto-denies and quarantines the session
+        |
+        v
+Frontend shows the evidence chain; no Allow action is offered
 ```
 
 ## Behavior Lanes
@@ -57,7 +66,7 @@ The backend returns a `behavior_lane` and `intent_alignment` so the UI can expla
 | --- | --- | --- |
 | `green` | The action appears aligned with the user's task and low risk. | Auto-allow, optionally show in an activity feed. |
 | `yellow` | The action is unclear or moderately risky. | Log or show a non-blocking warning. |
-| `red` | The action is high-risk or off-scope. | Interrupt and ask for Allow/Deny. |
+| `red` | The action is high-risk, off-scope, or part of a dangerous behavior chain. | Ask for Allow/Deny, or show an automatic containment result when `auto_contained` is true. |
 
 Intent alignment values:
 
@@ -114,7 +123,9 @@ Response body:
   "risk_score": 0,
   "reason": null,
   "behavior_lane": "green",
-  "intent_alignment": "aligned"
+  "intent_alignment": "aligned",
+  "chain_detected": false,
+  "containment_action": null
 }
 ```
 
@@ -128,6 +139,8 @@ Response fields:
 | `reason` | string or `null` | Denial reason, timeout reason, or blocked-tool reason. |
 | `behavior_lane` | `"green"`, `"yellow"`, `"red"`, or `null` | Product-level lane for the action. |
 | `intent_alignment` | `"aligned"`, `"uncertain"`, `"off_scope"`, or `null` | Whether the action matches the user's stated task. |
+| `chain_detected` | boolean | Whether recent actions in the same session formed a dangerous sequence. |
+| `containment_action` | string or `null` | Automatic or existing containment that affected this call. |
 
 Important frontend behavior:
 
@@ -135,6 +148,7 @@ Important frontend behavior:
 - Red-lane calls wait until a reviewer decision is submitted.
 - If no decision arrives before timeout, the backend denies by default.
 - If `user_intent` is omitted, the backend can still assess risk, but alignment becomes `uncertain`.
+- High-confidence exfiltration chains are denied automatically and quarantine the session.
 
 ### Submit Decision
 
@@ -186,6 +200,58 @@ If the `request_id` is missing or already gone:
 
 HTTP status: `404`
 
+### Containment Controls
+
+Quarantine an entire agent or one session:
+
+```http
+POST /api/containment/quarantine
+Content-Type: application/json
+```
+
+```json
+{
+  "scope": "session",
+  "agent_id": "demo-agent",
+  "session_id": "demo-session-1",
+  "reason": "Sensitive read followed by an external upload"
+}
+```
+
+Use `scope: "agent"` and omit `session_id` to stop every session owned by an agent.
+
+Release a containment with the same identity fields:
+
+```http
+POST /api/containment/release
+```
+
+List active containments. Optional `agent_id` and `session_id` query parameters are supported:
+
+```http
+GET /api/containment?agent_id=demo-agent&session_id=demo-session-1
+```
+
+Calls from quarantined identities return `denied` with `risk_score: 100` and do not execute.
+
+### Restore Backup
+
+```http
+POST /api/backups/{backup_id}/restore
+```
+
+```json
+{
+  "restored": true,
+  "backup_id": "dd5ba1a2-358e-4eca-af88-f971dae5156f",
+  "request_id": "52bf4de9-4943-4da9-acfa-ecc1f4c11775",
+  "original_path": "/project/src/index.html",
+  "restored_at": "2026-07-18T08:30:00+00:00"
+}
+```
+
+Only backup IDs recorded by the backend can be restored. A successful restore also emits a `backup_restored` WebSocket event.
+
 ### Event History
 
 ```http
@@ -214,7 +280,8 @@ Example response:
       "backup_id": null,
       "created_at": "2026-07-18T07:20:00+00:00",
       "args": {"path": "/project/.env"},
-      "matched_rules": ["intent:touches_secret"]
+      "matched_rules": ["intent:touches_secret"],
+      "chain_detected": false
     }
   ],
   "count": 1
@@ -237,6 +304,9 @@ Both filters are optional. Without filters, the response covers all recorded eve
   "lane_counts": {"green": 8, "yellow": 2, "red": 2},
   "risk_level_counts": {"LOW": 8, "MEDIUM": 2, "HIGH": 1, "CRITICAL": 1},
   "decision_counts": {"allowed": 9, "denied": 3},
+  "chain_events": 1,
+  "auto_contained_events": 1,
+  "active_containments": 1,
   "risk_type_counts": [
     {"type": "intent:touches_secret", "count": 2},
     {"type": "overwrite_existing_file", "count": 1}
@@ -247,6 +317,7 @@ Both filters are optional. Without filters, the response covers all recorded eve
       "total_events": 12,
       "red_events": 2,
       "denied_events": 3,
+      "chain_events": 1,
       "last_seen": "2026-07-18T07:20:00+00:00",
       "average_risk_score": 31.7
     }
@@ -262,6 +333,8 @@ Recommended dashboard mapping:
 | Risk severity chart | `risk_level_counts` |
 | Risk category chart | `risk_type_counts` |
 | Agent leaderboard or table | `agents` |
+| Attack-chain KPI | `chain_events` and `auto_contained_events` |
+| Quarantine badge | `active_containments` |
 | Recent activity feed | `GET /api/events` |
 
 ## WebSocket API
@@ -272,10 +345,12 @@ Connect to:
 ws://127.0.0.1:8000/ws/alerts
 ```
 
-The backend sends two event types:
+The backend sends four event types:
 
 1. `new_alert`
 2. `resolved`
+3. `containment_changed`
+4. `backup_restored`
 
 ### new_alert
 
@@ -303,11 +378,34 @@ Example:
   "backup_id": "dd5ba1a2-358e-4eca-af88-f971dae5156f",
   "behavior_lane": "red",
   "intent_alignment": "off_scope",
+  "chain_detected": false,
+  "auto_contained": false,
   "timestamp": "2026-07-18T05:30:42.643443+00:00"
 }
 ```
 
 Frontend should render this as a review card/modal.
+
+When `auto_contained` is `true`, render the event as an incident result rather than a pending approval. Do not show Allow/Deny buttons because the action has already been denied and contained.
+
+An automatically contained attack-chain alert includes:
+
+```json
+{
+  "chain_detected": true,
+  "auto_contained": true,
+  "matched_rules": [
+    "behavior_chain:sensitive_read_then_external_upload",
+    "behavior_chain:source:/project/.env"
+  ],
+  "containment": {
+    "scope": "session",
+    "agent_id": "demo-agent",
+    "session_id": "demo-session-1",
+    "active": true
+  }
+}
+```
 
 Recommended fields to show:
 
@@ -319,6 +417,8 @@ Recommended fields to show:
 - `risk_level`
 - `behavior_lane`
 - `intent_alignment`
+- `chain_detected`
+- `auto_contained`
 - `plain_explanation`
 - `args_summary.path`, if present
 - `matched_rules`
@@ -369,6 +469,14 @@ Frontend should:
 - Disable Allow/Deny buttons for that alert.
 - Show final state as allowed or denied.
 
+### containment_changed
+
+Emitted after a manual or automatic quarantine and after a release. Refresh `GET /api/containment` and update the affected agent/session badge.
+
+### backup_restored
+
+Emitted after a successful restore. Mark the matching backup and event as restored.
+
 ## Frontend State Shape
 
 Suggested state:
@@ -389,6 +497,9 @@ type FirewallAlert = {
   risk_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   behavior_lane: BehaviorLane;
   intent_alignment: IntentAlignment;
+  chain_detected: boolean;
+  auto_contained?: boolean;
+  containment?: Record<string, unknown> | null;
   plain_explanation: string;
   matched_rules: string[];
   backup_id?: string | null;
@@ -501,6 +612,16 @@ socket.onmessage = (message) => {
   if (event.type === "resolved") {
     // Mark alert as allowed/denied.
     console.log("Resolved alert", event);
+    return;
+  }
+
+  if (event.type === "containment_changed") {
+    console.log("Containment changed", event);
+    return;
+  }
+
+  if (event.type === "backup_restored") {
+    console.log("Backup restored", event);
     return;
   }
 };
@@ -653,6 +774,9 @@ Minimum UI:
 - Allow button.
 - Deny button.
 - Resolved state.
+- Agent/session quarantine and release controls.
+- Restore button when `backup_id` is present.
+- Behavior-chain evidence for `chain_detected` events.
 
 Recommended UI states:
 
@@ -675,6 +799,8 @@ Recommended UI states:
 - `backup_id` means a backup was created before the high-risk action was allowed or denied.
 - `args_summary` is already redacted by the backend privacy shield.
 - The backend currently accepts only `allow` and `deny` as decision values.
+- Auto-contained alerts are already resolved and must not submit a reviewer decision.
+- Session containment affects only that session; agent containment affects every session for that agent.
 - The current intent analyzer is deterministic and local. It is designed for demo reliability, not perfect semantic understanding.
 
 ## Tested Behavior
@@ -690,4 +816,7 @@ These behaviors were manually verified:
 - Timeout denies by default.
 - Dashboard event history can be filtered by agent and session.
 - Dashboard statistics include lane, severity, risk type, and per-agent counts.
-- Test suite passes with `91 passed`.
+- Sensitive-read-to-external-upload chains are automatically blocked before execution.
+- Auto-contained sessions reject later calls until released.
+- Automatic backups can be restored through the API.
+- Test suite passes with `103 passed`.

@@ -60,3 +60,23 @@ def test_final_score_is_max_of_static_and_llm(tmp_path):
     assessment = assess_risk("rm", {}, settings, llm)
 
     assert assessment.score == 100
+
+
+def test_aligned_intent_cannot_reduce_concrete_static_risk(tmp_path):
+    target = tmp_path / "project" / "src" / "index.html"
+    target.parent.mkdir(parents=True)
+    target.write_text("original")
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=10, explanation="Intent is aligned")
+
+    assessment = assess_risk(
+        "write_file",
+        {"path": str(target), "content": "modified"},
+        settings,
+        llm,
+        "Update the frontend login page",
+    )
+
+    assert assessment.score == 80
+    assert assessment.behavior_lane == "red"
+    assert len(llm.calls) == 1

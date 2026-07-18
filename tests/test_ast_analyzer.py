@@ -83,3 +83,47 @@ def test_score_capped_at_100(tmp_path):
         "rm", {"path": str(tmp_path / "project" / "src" / "index.html")}, settings
     )
     assert score == 100
+
+
+def test_no_duplicate_rules_when_path_and_command_match_same_file(tmp_path):
+    settings = _settings(tmp_path)
+    score, rules = analyze(
+        "run_shell",
+        {
+            "path": "/home/user/project/.env",
+            "command": "cat /home/user/project/.env",
+        },
+        settings,
+    )
+    assert len(rules) == len(set(rules))
+    critical_env_rules = [r for r in rules if r == "protected_path_critical:/.env"]
+    assert len(critical_env_rules) == 1
+
+
+def test_overlapping_shell_patterns_score_less_than_naive_sum(tmp_path):
+    settings = _settings(tmp_path)
+    score, rules = analyze("run_shell", {"command": "rm -rf /"}, settings)
+    # "rm -rf" (50) + "rm -r" (40) + " rm " (30) would naively sum to 120.
+    assert score < 120
+    assert any("dangerous_shell" in rule for rule in rules)
+
+
+def test_envrc_not_flagged_as_protected_env_path(tmp_path):
+    settings = _settings(tmp_path)
+    score, rules = analyze(
+        "read_file", {"path": "/home/user/project/.envrc"}, settings
+    )
+    assert not any(rule.startswith("protected_path_") for rule in rules)
+
+
+def test_analyze_does_not_raise_on_null_byte_path(tmp_path):
+    settings = _settings(tmp_path)
+    score, rules = analyze("write_file", {"path": "/tmp/evil\x00path"}, settings)
+    assert isinstance(score, int)
+
+
+def test_analyze_does_not_raise_on_non_string_code(tmp_path):
+    settings = _settings(tmp_path)
+    score, rules = analyze("exec_python", {"code": 12345}, settings)
+    assert isinstance(score, int)
+    assert isinstance(rules, list)

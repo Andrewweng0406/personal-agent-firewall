@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+
+from app.config import load_settings
+from app.gateway.router import GatewayState, build_router
+from app.risk.llm_translator import ClaudeRiskClient
+from app.state.audit_log import AuditLog
+from app.state.backup_manager import BackupManager
+from app.ws.manager import ConnectionManager
+
+settings = load_settings()
+audit_log = AuditLog(settings.audit_db_path)
+backup_manager = BackupManager(settings.backup_dir, audit_log)
+llm_client = ClaudeRiskClient(api_key=settings.anthropic_api_key)
+ws_manager = ConnectionManager()
+gateway_state = GatewayState(settings, llm_client, audit_log, backup_manager, ws_manager)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings.backup_dir.mkdir(parents=True, exist_ok=True)
+    await audit_log.init_db()
+    yield
+
+
+app = FastAPI(title="Personal Agent Firewall", lifespan=lifespan)
+app.include_router(build_router(gateway_state))
+
+
+@app.websocket("/ws/alerts")
+async def ws_alerts(websocket: WebSocket) -> None:
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)

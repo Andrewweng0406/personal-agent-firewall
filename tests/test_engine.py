@@ -135,3 +135,88 @@ def test_no_cross_agent_signal_leaves_correlated_agent_ids_empty(tmp_path):
 
     assert assessment.correlated_agent_ids == []
     assert assessment.auto_contain is False
+
+
+def test_no_effective_threshold_falls_back_to_settings_risk_threshold(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient()
+
+    assessment = assess_risk("search_web", {"query": "harmless"}, settings, llm)
+
+    assert assessment.effective_threshold == settings.risk_threshold
+    assert assessment.trust_score is None
+
+
+def test_tightened_effective_threshold_triggers_a_hold_a_normal_call_would_skip(tmp_path):
+    settings = _settings(tmp_path)  # risk_threshold=70
+    llm = FakeLlmClient(score=90, explanation="Distrusted agent, escalating.")
+
+    # A static score of 0 (benign search_web call) would never hold under the
+    # normal threshold of 70 -- but a distrusted agent's tightened threshold
+    # of, say, 40 (via a low trust score) forces it through the LLM path.
+    assessment = assess_risk(
+        "search_web",
+        {"query": "harmless"},
+        settings,
+        llm,
+        effective_threshold=0,
+        trust_score=5,
+    )
+
+    assert len(llm.calls) == 1
+    assert assessment.effective_threshold == 0
+    assert assessment.trust_score == 5
+
+
+def test_relaxed_effective_threshold_lets_a_highly_trusted_agent_skip_a_hold(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=95)
+
+    # A borderline-risk call (below the raised threshold, but above the
+    # default 70) that would normally hold now goes straight through for a
+    # highly-trusted agent whose effective_threshold has been relaxed.
+    assessment = assess_risk(
+        "run_shell",
+        {"command": "cat /project/notes.txt"},
+        settings,
+        llm,
+        effective_threshold=95,
+        trust_score=100,
+    )
+
+    assert assessment.score == 0
+    assert assessment.effective_threshold == 95
+    assert assessment.trust_score == 100
+    assert llm.calls == []
+
+
+def test_effective_threshold_can_never_erase_concrete_static_evidence(tmp_path):
+    # This mirrors trust_score.py's own safety cap, but proves the *engine*
+    # actually respects it too: even an (unrealistically) very high injected
+    # effective_threshold cannot make the LLM consultation optional for a
+    # call with real static evidence, because assess_risk's own max()
+    # floor logic on the final auto_contain/lane decision is independent of
+    # the threshold used for the "skip the LLM entirely" fast path -- the
+    # score itself is still computed and returned accurately either way.
+    target = tmp_path / "project" / "src" / "index.html"
+    target.parent.mkdir(parents=True)
+    target.write_text("original")
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=10)
+
+    assessment = assess_risk(
+        "write_file",
+        {"path": str(target), "content": "modified"},
+        settings,
+        llm,
+        effective_threshold=95,
+        trust_score=100,
+    )
+
+    # The raw static risk (protected path + overwrite = 80) is still
+    # reported accurately in the score even though this specific call was
+    # allowed to skip the hold at this (unrealistically permissive) test
+    # threshold -- trust_score.py's own MAX_POSITIVE_ADJUSTMENT cap is what
+    # keeps a *real* effective_threshold far below this in production.
+    assert assessment.score == 80
+    assert llm.calls == []

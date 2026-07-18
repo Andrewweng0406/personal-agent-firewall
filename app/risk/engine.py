@@ -27,9 +27,12 @@ def assess_risk(
     user_intent: str | None = None,
     behavior_signal: BehaviorSignal | None = None,
     cross_agent_signal: CrossAgentSignal | None = None,
+    effective_threshold: int | None = None,
+    trust_score: int | None = None,
 ) -> RiskAssessment:
     behavior_signal = behavior_signal or BehaviorSignal()
     cross_agent_signal = cross_agent_signal or CrossAgentSignal()
+    threshold = effective_threshold if effective_threshold is not None else settings.risk_threshold
     static_score, matched_rules = analyze_ast(tool_name, args, settings)
     intent_signal = assess_intent(tool_name, args, user_intent)
     contextual_score = min(
@@ -57,14 +60,14 @@ def assess_risk(
         # Off-scope intent alone must be enough to force human review, even if
         # the target isn't a statically protected path and the raw score
         # would otherwise land below the threshold.
-        score = max(score, settings.risk_threshold)
+        score = max(score, threshold)
     lane = _lane_for_score_and_intent(score, alignment)
     # behavior_chain/cross_agent signals are the strongest evidence and always
     # win; the LLM's explanation is preferred over intent_analyzer's generic
     # fallback text ("No user intent was provided...") whenever it's used.
     priority_explanation = behavior_signal.explanation or cross_agent_signal.explanation
 
-    if score < settings.risk_threshold:
+    if score < threshold:
         return RiskAssessment(
             score=score,
             level=_level_for_score(score),
@@ -75,6 +78,8 @@ def assess_risk(
             chain_detected=behavior_signal.chain_detected,
             auto_contain=auto_contain,
             correlated_agent_ids=cross_agent_signal.correlated_agent_ids,
+            trust_score=trust_score,
+            effective_threshold=threshold,
         )
 
     llm_result = llm_client.assess(tool_name, args, all_rules)
@@ -91,6 +96,8 @@ def assess_risk(
         chain_detected=behavior_signal.chain_detected,
         auto_contain=auto_contain,
         correlated_agent_ids=cross_agent_signal.correlated_agent_ids,
+        trust_score=trust_score,
+        effective_threshold=threshold,
     )
 
 

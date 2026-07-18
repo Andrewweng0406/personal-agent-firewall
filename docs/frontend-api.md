@@ -126,7 +126,9 @@ Response body:
   "intent_alignment": "aligned",
   "chain_detected": false,
   "containment_action": null,
-  "correlated_agent_ids": []
+  "correlated_agent_ids": [],
+  "trust_score": 50,
+  "effective_threshold": 70
 }
 ```
 
@@ -143,6 +145,10 @@ Response fields:
 | `chain_detected` | boolean | Whether recent actions in the same session (or a correlated different agent) formed a dangerous sequence. |
 | `containment_action` | string or `null` | Automatic or existing containment that affected this call. |
 | `correlated_agent_ids` | string array | Other agent identities whose recent denied activity targeted the same file/command as this call. Non-empty means this call was flagged (and, if `auto_contain`d, those other agents were also quarantined at `"agent"` scope) because of a cross-agent pattern, not just this session's own history. |
+| `trust_score` | number or `null` | This agent's own trust score (0-100, 50 is neutral), derived from its history. `null` only for calls that short-circuit before risk assessment runs (blocked tool, existing containment). |
+| `effective_threshold` | number or `null` | The actual hold threshold used for this call, after trust-based adjustment. A repeatedly risky agent gets a *lower* threshold (easier to trigger a hold, watched more closely); a consistently clean agent gets a *slightly* higher one (fewer unnecessary interruptions) -- capped so trust alone can never raise it high enough to swallow real static evidence. |
+
+`trust_score`/`effective_threshold` are worth surfacing on a per-agent profile view (e.g. next to the dashboard's agent table) so a reviewer can see *why* an agent is being held more or less often than others -- it's driven by that agent's own track record, not a global setting.
 
 When `correlated_agent_ids` is non-empty, render it distinctly from a same-session `chain_detected` event -- this is evidence of a *coordinated or replayed* attack across multiple agent identities, not one agent going rogue. Every agent listed there has already been quarantined at `"agent"` scope (all of their sessions, not just the one that triggered this call), so no separate action is needed to contain them.
 

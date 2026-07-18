@@ -772,6 +772,94 @@ async def test_cross_agent_correlation_quarantines_both_agent_identities(tmp_pat
     assert blocked_followup.json()["status"] == "denied"
 
 
+async def test_distrusted_agent_gets_held_for_a_call_a_neutral_agent_would_skip(tmp_path):
+    from datetime import datetime, timezone
+
+    state = await _build_state(tmp_path, critical_paths=[])
+
+    # Seed a track record of repeated auto-containment for this agent so its
+    # trust score is fully eroded before the call under test ever happens.
+    for i in range(3):
+        await state.audit_log.log_event(
+            request_id=f"seed-{i}",
+            agent_id="repeat-offender",
+            session_id=f"past-session-{i}",
+            tool_name="run_shell",
+            args={"command": "rm -rf /"},
+            risk_score=100,
+            risk_level="CRITICAL",
+            behavior_lane="red",
+            intent_alignment="off_scope",
+            user_intent=None,
+            matched_rules=["dangerous_shell:rm -rf"],
+            decision="denied_auto_contained",
+            plain_explanation="prior incident",
+            backup_id=None,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    app = _make_app(state)
+
+    borderline_code = (
+        "import os\n"
+        "try:\n    os.rmdir('/tmp/agent_firewall_test_borderline_dir')\n"
+        "except OSError:\n    pass\n"
+        "import subprocess\n"
+        "try:\n    subprocess.Popen(['true']).wait()\n"
+        "except Exception:\n    pass\n"
+        "result = 'done'\n"
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Same borderline call, but from a brand new agent with no history --
+        # neutral trust means the default threshold (70) applies, and this
+        # call's static score (55) stays under it, so it auto-executes.
+        neutral_response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "exec_python",
+                "args": {"code": borderline_code},
+                "agent_id": "never-seen-before",
+                "session_id": "first-session",
+            },
+        )
+        assert neutral_response.json()["status"] == "allowed"
+        assert neutral_response.json()["trust_score"] == 50
+        assert neutral_response.json()["effective_threshold"] == 70
+
+        # The distrusted agent's identical borderline call now holds instead
+        # of auto-executing, because its own track record tightened its
+        # effective threshold below its static score.
+        distrusted_call = asyncio.create_task(
+            client.post(
+                "/api/tool_call",
+                json={
+                    "tool_name": "exec_python",
+                    "args": {"code": borderline_code},
+                    "agent_id": "repeat-offender",
+                    "session_id": "new-session",
+                },
+            )
+        )
+        while not state.pending:
+            await asyncio.sleep(0.01)
+        request_id = next(iter(state.pending))
+        await client.post(f"/api/decision/{request_id}", json={"decision": "deny"})
+        distrusted_response = await distrusted_call
+
+    body = distrusted_response.json()
+    assert body["status"] == "denied"
+    # Once the tightened threshold is crossed, the (fake) LLM is consulted
+    # too, so the final score is max(static=55, llm's default=80) -- the
+    # important thing is that it held at all, which the neutral-trust call
+    # above with the identical static score did not.
+    assert body["risk_score"] >= 55
+    assert body["trust_score"] == 0
+    assert body["effective_threshold"] < 70
+
+
 async def test_manual_agent_quarantine_and_release_endpoints(tmp_path):
     state = await _build_state(tmp_path)
     app = _make_app(state)

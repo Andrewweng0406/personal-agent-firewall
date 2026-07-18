@@ -27,6 +27,8 @@ class ToolCallResponse(BaseModel):
     chain_detected: bool = False
     containment_action: str | None = None
     correlated_agent_ids: list[str] = Field(default_factory=list)
+    trust_score: int | None = None
+    effective_threshold: int | None = None
 
 
 class RiskAssessment(BaseModel):
@@ -39,6 +41,8 @@ class RiskAssessment(BaseModel):
     chain_detected: bool = False
     auto_contain: bool = False
     correlated_agent_ids: list[str] = Field(default_factory=list)
+    trust_score: int | None = None
+    effective_threshold: int | None = None
 
 
 class DecisionRequest(BaseModel):

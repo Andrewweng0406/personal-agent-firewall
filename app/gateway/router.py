@@ -17,6 +17,7 @@ from app.privacy.shield import scan_and_redact
 from app.privacy.vector_store import SemanticPiiDetector
 from app.risk.behavior_chain import analyze_behavior_chain
 from app.risk.cross_agent_correlation import detect_cross_agent_pattern
+from app.risk.trust_score import compute_trust_profile
 from app.risk.engine import assess_risk
 from app.risk.llm_translator import RiskLlmClient
 from app.state.audit_log import AuditLog
@@ -186,6 +187,8 @@ def build_router(state: GatewayState) -> APIRouter:
         cross_agent_signal = detect_cross_agent_pattern(
             request.agent_id, request.tool_name, sanitized_args, system_wide_recent
         )
+        agent_history = await state.audit_log.list_events(request.agent_id, None, limit=50)
+        trust_profile = compute_trust_profile(settings.risk_threshold, agent_history)
         assessment = await asyncio.to_thread(
             assess_risk,
             request.tool_name,
@@ -195,6 +198,8 @@ def build_router(state: GatewayState) -> APIRouter:
             sanitized_intent,
             behavior_signal,
             cross_agent_signal,
+            trust_profile.effective_threshold,
+            trust_profile.trust_score,
         )
 
         if assessment.auto_contain:
@@ -275,9 +280,11 @@ def build_router(state: GatewayState) -> APIRouter:
                 chain_detected=True,
                 containment_action="session_quarantined",
                 correlated_agent_ids=assessment.correlated_agent_ids,
+                trust_score=assessment.trust_score,
+                effective_threshold=assessment.effective_threshold,
             )
 
-        if assessment.score < settings.risk_threshold:
+        if assessment.score < assessment.effective_threshold:
             try:
                 result = await _execute_and_sanitize(
                     request.tool_name, sanitized_args, state.semantic_pii_detector
@@ -304,6 +311,8 @@ def build_router(state: GatewayState) -> APIRouter:
                 behavior_lane=assessment.behavior_lane,
                 intent_alignment=assessment.intent_alignment,
                 chain_detected=assessment.chain_detected,
+                trust_score=assessment.trust_score,
+                effective_threshold=assessment.effective_threshold,
             )
 
         candidate_paths: list[str] = []
@@ -393,6 +402,8 @@ def build_router(state: GatewayState) -> APIRouter:
                 behavior_lane=assessment.behavior_lane,
                 intent_alignment=assessment.intent_alignment,
                 chain_detected=assessment.chain_detected,
+                trust_score=assessment.trust_score,
+                effective_threshold=assessment.effective_threshold,
             )
             final_decision = "allowed"
         else:
@@ -408,6 +419,8 @@ def build_router(state: GatewayState) -> APIRouter:
                 behavior_lane=assessment.behavior_lane,
                 intent_alignment=assessment.intent_alignment,
                 chain_detected=assessment.chain_detected,
+                trust_score=assessment.trust_score,
+                effective_threshold=assessment.effective_threshold,
             )
             final_decision = "denied"
 

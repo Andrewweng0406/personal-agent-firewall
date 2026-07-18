@@ -1,0 +1,9 @@
+{
+  "critical_paths": [
+    {"path": "/src/index.html", "risk_level": "CRITICAL", "auto_backup": true},
+    {"path": "/.env", "risk_level": "CRITICAL", "auto_backup": true},
+    {"path": "/src/main.py", "risk_level": "HIGH", "auto_backup": true}
+  ],
+  "allowed_tools": ["read_file", "search_web"],
+  "blocked_tools": ["rm", "format", "flush_db"]
+}

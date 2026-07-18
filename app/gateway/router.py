@@ -66,7 +66,7 @@ async def _log(
 
 async def _execute_and_sanitize(tool_name: str, args: dict):
     try:
-        result = tool_executor.execute(tool_name, args)
+        result = await asyncio.to_thread(tool_executor.execute, tool_name, args)
     except ToolExecutionError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     sanitized_result, _ = scan_and_redact(result)
@@ -91,10 +91,20 @@ def build_router(state: GatewayState) -> APIRouter:
                 status="denied", reason="Tool is on the blocked list.", risk_score=100
             )
 
-        assessment = assess_risk(request.tool_name, sanitized_args, settings, state.llm_client)
+        assessment = await asyncio.to_thread(
+            assess_risk, request.tool_name, sanitized_args, settings, state.llm_client
+        )
 
         if assessment.score < settings.risk_threshold:
-            result = await _execute_and_sanitize(request.tool_name, sanitized_args)
+            try:
+                result = await _execute_and_sanitize(request.tool_name, sanitized_args)
+            except HTTPException as exc:
+                await _log(
+                    state, request_id, request.tool_name, sanitized_args,
+                    assessment.score, assessment.level, "allowed",
+                    f"Tool execution failed: {exc.detail}", None,
+                )
+                raise
             await _log(
                 state, request_id, request.tool_name, sanitized_args,
                 assessment.score, assessment.level, "allowed", "", None,
@@ -136,7 +146,18 @@ def build_router(state: GatewayState) -> APIRouter:
             state.pending.pop(request_id, None)
 
         if decision == "allow":
-            result = await _execute_and_sanitize(request.tool_name, sanitized_args)
+            try:
+                result = await _execute_and_sanitize(request.tool_name, sanitized_args)
+            except HTTPException as exc:
+                await _log(
+                    state, request_id, request.tool_name, sanitized_args,
+                    assessment.score, assessment.level, "allowed",
+                    f"Tool execution failed: {exc.detail}", backup_id,
+                )
+                await state.ws_manager.broadcast(
+                    {"type": "resolved", "request_id": request_id, "decision": "allowed"}
+                )
+                raise
             outcome = ToolCallResponse(status="allowed", result=result, risk_score=assessment.score)
             final_decision = "allowed"
         else:

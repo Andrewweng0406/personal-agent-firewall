@@ -217,3 +217,104 @@ async def test_high_risk_call_times_out_and_denies(tmp_path):
     assert body["status"] == "denied"
     assert "timed out" in body["reason"].lower()
     assert target.read_text() == "<html>old</html>"
+
+
+async def test_pii_in_args_is_redacted_end_to_end(tmp_path):
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "search_web",
+                "args": {"query": "contact me at someone@example.com please"},
+                "agent_id": "agent-1",
+                "session_id": "s-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert "someone@example.com" not in response.text
+
+    events = await state.audit_log.list_events()
+    assert len(events) == 1
+    assert "someone@example.com" not in events[0]["args_json"]
+    assert "[REDACTED:EMAIL]" in events[0]["args_json"]
+
+
+async def test_decision_for_unknown_request_id_returns_404(tmp_path):
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/decision/does-not-exist", json={"decision": "allow"}
+        )
+
+    assert response.status_code == 404
+
+
+async def test_second_decision_after_resolution_is_a_clean_no_op(tmp_path):
+    target = tmp_path / "project" / "src" / "index.html"
+    target.parent.mkdir(parents=True)
+    target.write_text("<html>old</html>")
+
+    state = await _build_state(
+        tmp_path,
+        critical_paths=[
+            ProtectedPathEntry(path="/src/index.html", risk_level="CRITICAL", auto_backup=True)
+        ],
+    )
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def call():
+            return await client.post(
+                "/api/tool_call",
+                json={
+                    "tool_name": "write_file",
+                    "args": {"path": str(target), "content": "<html>new</html>"},
+                    "agent_id": "agent-1",
+                    "session_id": "s-1",
+                },
+            )
+
+        async def decide_twice():
+            while not state.pending:
+                await asyncio.sleep(0.01)
+            request_id = next(iter(state.pending))
+            first = await client.post(
+                f"/api/decision/{request_id}", json={"decision": "allow"}
+            )
+            # In practice the second call still lands while request_id is
+            # present in state.pending (the awaiting tool_call handler hasn't
+            # been scheduled to pop it yet), so it hits the
+            # `if not pending.future.done()` guard and is a clean no-op that
+            # still returns 200/{"ack": True} rather than a 404.
+            second = await client.post(
+                f"/api/decision/{request_id}", json={"decision": "deny"}
+            )
+            return first, second
+
+        call_response, (first_decision, second_decision) = await asyncio.gather(
+            call(), decide_twice()
+        )
+
+    assert first_decision.status_code == 200
+    assert first_decision.json() == {"ack": True}
+    # Second decision is a no-op per the future.done() guard: it still
+    # responds cleanly (200/{"ack": True}) even though it had no effect.
+    assert second_decision.status_code == 200
+    assert second_decision.json() == {"ack": True}
+    # The original "allow" decision is what took effect, unaffected by the
+    # second (deny) call.
+    assert call_response.json()["status"] == "allowed"
+    assert target.read_text() == "<html>new</html>"

@@ -112,6 +112,10 @@ async def test_dangerous_overwrite_scenario_is_blocked_and_backed_up(tmp_path):
     assert index_html.read_text() == "<html>original homepage</html>"
     assert any(msg["type"] == "new_alert" for msg in state.ws_manager.broadcasts)
 
+    # Verify that BackupManager.snapshot() actually ran and produced a backup
+    new_alert_msg = next(msg for msg in state.ws_manager.broadcasts if msg["type"] == "new_alert")
+    assert new_alert_msg.get("backup_id") is not None
+
 
 async def test_prompt_injection_scenario_is_blocked(tmp_path):
     app, state, project_root = await _build_app(tmp_path)

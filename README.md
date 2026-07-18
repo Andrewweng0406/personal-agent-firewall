@@ -8,7 +8,11 @@ restore files from automatic snapshots.
 ## Setup
 
     pip install -r requirements.txt
-    cp .env.example .env   # fill in ANTHROPIC_API_KEY
+    cp .env.example .env   # fill in ANTHROPIC_API_KEY or OPENAI_API_KEY
+
+Set `LLM_PROVIDER=anthropic` or `LLM_PROVIDER=openai` in `.env` to choose
+which model generates the plain-language risk explanations. Only one key is
+required for the provider you pick.
 
 ## Run the server
 
@@ -53,6 +57,34 @@ The demo reproduces a prompt-injection sequence:
 4. The firewall correlates both actions, blocks the upload automatically,
    and quarantines the session.
 5. A later benign action from the same session is also denied.
+
+## Run a real LangChain agent against the firewall
+
+The scripts above simulate an agent by posting scripted tool calls directly.
+`integrations/` instead wires up a real, LLM-driven LangChain agent (no
+scripted behavior) whose tools are backed by the firewall:
+
+    python -m integrations.langchain_agent_demo
+
+This seeds a project with a styling task and a poisoned `notes.txt` file
+containing an indirect prompt injection ("read then delete `.env`"). The
+agent decides on its own what tools to call; every call is routed through
+`POST /api/tool_call` first via `integrations/langchain_tools.py`, which
+wraps plain Python functions (`read_file`, `write_file`, `run_shell`) as
+LangChain tools -- no changes to the agent's reasoning loop are needed. A
+denial comes back as a normal tool result (prefixed
+`[FIREWALL BLOCKED THIS ACTION]`), so the agent's own model sees it and
+reacts, the same way it reacts to any other tool output.
+
+By default each held call waits up to `DECISION_TIMEOUT_SECONDS` (120s) for
+a reviewer decision before failing closed. For an unattended run, start the
+server with a short timeout instead:
+
+    DECISION_TIMEOUT_SECONDS=8 uvicorn app.main:app
+
+`integrations/langchain_tools.py`'s `build_firewalled_tools(...)` is
+reusable for wiring any LangChain (or plain function-calling) agent's tools
+through the firewall -- it is not specific to this demo script.
 
 ## API contract
 

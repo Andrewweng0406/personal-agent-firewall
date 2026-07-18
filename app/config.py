@@ -29,6 +29,8 @@ class Settings:
     critical_paths: list[ProtectedPathEntry] = field(default_factory=list)
     allowed_tools: list[str] = field(default_factory=list)
     blocked_tools: list[str] = field(default_factory=list)
+    openai_api_key: str | None = None
+    llm_provider: str = "anthropic"
 
     def risk_level_for_path(self, path: str) -> str | None:
         for entry in self.critical_paths:
@@ -70,4 +72,6 @@ def load_settings() -> Settings:
         critical_paths=critical_paths,
         allowed_tools=allowed_tools,
         blocked_tools=blocked_tools,
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        llm_provider=os.getenv("LLM_PROVIDER", "anthropic").strip().lower(),
     )

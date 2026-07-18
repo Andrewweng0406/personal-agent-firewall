@@ -73,3 +73,33 @@ def test_load_settings_reads_env(tmp_path: Path, monkeypatch):
     assert settings.risk_threshold == 55
     assert settings.decision_timeout_seconds == 30
     assert settings.blocked_tools == ["rm"]
+
+
+def test_load_settings_defaults_llm_provider_to_anthropic(tmp_path: Path, monkeypatch):
+    data = {"critical_paths": [], "allowed_tools": [], "blocked_tools": []}
+    file_path = tmp_path / "protected_paths.json"
+    file_path.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setenv("PROTECTED_PATHS_FILE", str(file_path))
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    settings = load_settings()
+
+    assert settings.llm_provider == "anthropic"
+    assert settings.openai_api_key is None
+
+
+def test_load_settings_reads_openai_provider_and_key(tmp_path: Path, monkeypatch):
+    data = {"critical_paths": [], "allowed_tools": [], "blocked_tools": []}
+    file_path = tmp_path / "protected_paths.json"
+    file_path.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setenv("PROTECTED_PATHS_FILE", str(file_path))
+    monkeypatch.setenv("LLM_PROVIDER", "OpenAI")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-key")
+
+    settings = load_settings()
+
+    assert settings.llm_provider == "openai"
+    assert settings.openai_api_key == "sk-test-openai-key"

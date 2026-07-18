@@ -6,7 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from app.config import load_settings
 from app.gateway.router import GatewayState, build_router
-from app.risk.llm_translator import ClaudeRiskClient
+from app.risk.llm_translator import build_llm_client
 from app.state.audit_log import AuditLog
 from app.state.backup_manager import BackupManager
 from app.state.containment import ContainmentStore
@@ -15,7 +15,9 @@ from app.ws.manager import ConnectionManager
 settings = load_settings()
 audit_log = AuditLog(settings.audit_db_path)
 backup_manager = BackupManager(settings.backup_dir, audit_log)
-llm_client = ClaudeRiskClient(api_key=settings.anthropic_api_key)
+llm_client = build_llm_client(
+    settings.llm_provider, settings.anthropic_api_key, settings.openai_api_key
+)
 ws_manager = ConnectionManager()
 containment_store = ContainmentStore(settings.audit_db_path)
 gateway_state = GatewayState(

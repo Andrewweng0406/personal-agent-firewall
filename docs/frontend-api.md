@@ -218,7 +218,25 @@ Content-Type: application/json
 }
 ```
 
-Use `scope: "agent"` and omit `session_id` to stop every session owned by an agent.
+Use `scope: "agent"` and omit `session_id` to stop every session owned by an agent. If `scope` is `"session"`, `session_id` is required — omitting it returns HTTP `422`.
+
+Success response:
+
+```json
+{
+  "containment": {
+    "scope": "session",
+    "agent_id": "demo-agent",
+    "session_id": "demo-session-1",
+    "reason": "Sensitive read followed by an external upload",
+    "active": true,
+    "created_at": "2026-07-18T08:07:23.483608+00:00",
+    "released_at": null
+  }
+}
+```
+
+A successful call also emits a `containment_changed` WebSocket event with `"action": "quarantined"`.
 
 Release a containment with the same identity fields:
 
@@ -226,10 +244,35 @@ Release a containment with the same identity fields:
 POST /api/containment/release
 ```
 
+```json
+{
+  "released": true
+}
+```
+
+If there is no active containment matching that `scope`/`agent_id`/`session_id`, this returns HTTP `404` with `{"detail": "Active containment not found"}`. A successful release emits a `containment_changed` event with `"action": "released"`.
+
 List active containments. Optional `agent_id` and `session_id` query parameters are supported:
 
 ```http
 GET /api/containment?agent_id=demo-agent&session_id=demo-session-1
+```
+
+```json
+{
+  "containments": [
+    {
+      "scope": "session",
+      "agent_id": "demo-agent",
+      "session_id": "demo-session-1",
+      "reason": "Sensitive read followed by an external upload",
+      "active": true,
+      "created_at": "2026-07-18T08:07:23.483608+00:00",
+      "released_at": null
+    }
+  ],
+  "count": 1
+}
 ```
 
 Calls from quarantined identities return `denied` with `risk_score: 100` and do not execute.
@@ -303,7 +346,7 @@ Both filters are optional. Without filters, the response covers all recorded eve
   "total_events": 12,
   "lane_counts": {"green": 8, "yellow": 2, "red": 2},
   "risk_level_counts": {"LOW": 8, "MEDIUM": 2, "HIGH": 1, "CRITICAL": 1},
-  "decision_counts": {"allowed": 9, "denied": 3},
+  "decision_counts": {"allowed": 9, "denied": 2, "denied_auto_contained": 1},
   "chain_events": 1,
   "auto_contained_events": 1,
   "active_containments": 1,
@@ -336,6 +379,8 @@ Recommended dashboard mapping:
 | Attack-chain KPI | `chain_events` and `auto_contained_events` |
 | Quarantine badge | `active_containments` |
 | Recent activity feed | `GET /api/events` |
+
+`decision_counts` keys are the raw `decision` values written to the audit log, not just `"allowed"`/`"denied"` — they also include `allowed_execution_failed`, `denied_quarantined`, and `denied_auto_contained`. Do not hardcode a two-key mapping; sum every key that starts with `"denied"` if you want a single "denied" total, and every key that starts with `"allowed"` for an "allowed" total (this is exactly what `agents[].denied_events` already does server-side for the per-agent breakdown).
 
 ## WebSocket API
 
@@ -819,4 +864,5 @@ These behaviors were manually verified:
 - Sensitive-read-to-external-upload chains are automatically blocked before execution.
 - Auto-contained sessions reject later calls until released.
 - Automatic backups can be restored through the API.
-- Test suite passes with `103 passed`.
+- Off-scope intent alone (e.g. a frontend-scoped task editing a backend file with no other static risk signal) forces a hold even when the target is not in `protected_paths.json`.
+- Test suite passes with `105 passed`.

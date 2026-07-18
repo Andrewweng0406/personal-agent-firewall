@@ -103,8 +103,14 @@ def test_no_duplicate_rules_when_path_and_command_match_same_file(tmp_path):
 def test_overlapping_shell_patterns_score_less_than_naive_sum(tmp_path):
     settings = _settings(tmp_path)
     score, rules = analyze("run_shell", {"command": "rm -rf /"}, settings)
-    # "rm -rf" (50) + "rm -r" (40) + " rm " (30) would naively sum to 120.
-    assert score < 120
+    # "rm -rf" (50), "rm -r" (40), and " rm " (30) all match "rm -rf /".
+    # The old buggy behavior summed-and-capped these to
+    # min(50 + 40 + 30, 100) = 100. The fixed behavior takes the max
+    # weight among matched patterns instead, which is 50 here. Asserting
+    # the exact value (rather than e.g. `score < 120`, which is satisfied
+    # by both the buggy and fixed behavior for this input) ensures this
+    # test actually fails if the max-based fix regresses to summing.
+    assert score == 50
     assert any("dangerous_shell" in rule for rule in rules)
 
 
@@ -127,3 +133,17 @@ def test_analyze_does_not_raise_on_non_string_code(tmp_path):
     score, rules = analyze("exec_python", {"code": 12345}, settings)
     assert isinstance(score, int)
     assert isinstance(rules, list)
+
+
+def test_analyze_does_not_raise_on_non_string_path(tmp_path):
+    settings = _settings(tmp_path)
+
+    score, rules = analyze("write_file", {"path": 12345}, settings)
+    assert isinstance(score, int)
+    assert score == 0
+    assert rules == []
+
+    score, rules = analyze("write_file", {"path": ["a", "b"]}, settings)
+    assert isinstance(score, int)
+    assert score == 0
+    assert rules == []

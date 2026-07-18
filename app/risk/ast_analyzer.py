@@ -122,6 +122,8 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
         add_rule(f"blocked_tool:{tool_name}", 100)
 
     path = args.get("path")
+    if not isinstance(path, str):
+        path = None
     if path:
         for rule, weight in _score_protected_paths_in_text(path, settings):
             add_rule(rule, weight)

@@ -13,14 +13,20 @@ def read_file(args: dict) -> Any:
     path = Path(args["path"])
     if not path.exists():
         raise ToolExecutionError(f"File not found: {path}")
-    return path.read_text(encoding="utf-8")
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise ToolExecutionError(f"read_file failed: {exc}") from exc
 
 
 def write_file(args: dict) -> Any:
     path = Path(args["path"])
-    path.parent.mkdir(parents=True, exist_ok=True)
     content = args.get("content", "")
-    path.write_text(content, encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        raise ToolExecutionError(f"write_file failed: {exc}") from exc
     return f"Wrote {len(content)} bytes to {path}"
 
 
@@ -36,9 +42,13 @@ def exec_python(args: dict) -> Any:
 
 def run_shell(args: dict) -> Any:
     command = args.get("command", "")
-    completed = subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=10
-    )
+    timeout = args.get("timeout", 10)
+    try:
+        completed = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=timeout
+        )
+    except Exception as exc:
+        raise ToolExecutionError(f"run_shell failed: {exc}") from exc
     if completed.returncode != 0:
         raise ToolExecutionError(completed.stderr.strip())
     return completed.stdout.strip()

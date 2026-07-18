@@ -262,6 +262,47 @@ async def test_off_scope_secret_access_broadcasts_red_lane(tmp_path):
     assert "intent:touches_secret" in new_alert_msg["matched_rules"]
 
 
+async def test_off_scope_intent_alone_holds_even_without_protected_path(tmp_path):
+    # No critical_paths configured: the target file is not statically
+    # protected, so static AST scoring alone would score this call 0.
+    # Off-scope intent must still be enough to force a hold.
+    state = await _build_state(tmp_path, critical_paths=[])
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def call():
+            return await client.post(
+                "/api/tool_call",
+                json={
+                    "tool_name": "write_file",
+                    "args": {
+                        "path": "/project/app/auth/session.py",
+                        "content": "# unrelated backend edit",
+                    },
+                    "agent_id": "agent-1",
+                    "session_id": "s-1",
+                    "user_intent": "Update the frontend login page button styling",
+                },
+            )
+
+        async def decide():
+            while not state.pending:
+                await asyncio.sleep(0.01)
+            request_id = next(iter(state.pending))
+            return await client.post(f"/api/decision/{request_id}", json={"decision": "deny"})
+
+        call_response, _decide_response = await asyncio.gather(call(), decide())
+
+    assert call_response.json()["status"] == "denied"
+    new_alert_msg = next(msg for msg in state.ws_manager.broadcasts if msg["type"] == "new_alert")
+    assert new_alert_msg["behavior_lane"] == "red"
+    assert new_alert_msg["intent_alignment"] == "off_scope"
+    assert "intent:off_scope_backend" in new_alert_msg["matched_rules"]
+
+
 async def test_dashboard_endpoints_return_agent_and_risk_type_statistics(tmp_path):
     target = tmp_path / "project" / "src" / "components" / "LoginButton.tsx"
     target.parent.mkdir(parents=True)

@@ -62,6 +62,24 @@ def test_final_score_is_max_of_static_and_llm(tmp_path):
     assert assessment.score == 100
 
 
+def test_off_scope_intent_alone_forces_hold_even_without_static_risk(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=10, explanation="Off scope for the stated task")
+
+    assessment = assess_risk(
+        "write_file",
+        {"path": "/project/app/auth/session.py", "content": "# unrelated backend edit"},
+        settings,
+        llm,
+        "Update the frontend login page button styling",
+    )
+
+    assert assessment.score >= settings.risk_threshold
+    assert assessment.behavior_lane == "red"
+    assert assessment.intent_alignment == "off_scope"
+    assert len(llm.calls) == 1
+
+
 def test_aligned_intent_cannot_reduce_concrete_static_risk(tmp_path):
     target = tmp_path / "project" / "src" / "index.html"
     target.parent.mkdir(parents=True)

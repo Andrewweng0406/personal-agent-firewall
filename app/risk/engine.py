@@ -43,6 +43,11 @@ def assess_risk(
         rule for rule in behavior_signal.matched_rules if rule not in all_rules
     )
     alignment = "off_scope" if behavior_signal.auto_contain else intent_signal.alignment
+    if alignment == "off_scope":
+        # Off-scope intent alone must be enough to force human review, even if
+        # the target isn't a statically protected path and the raw score
+        # would otherwise land below the threshold.
+        score = max(score, settings.risk_threshold)
     lane = _lane_for_score_and_intent(score, alignment)
 
     if score < settings.risk_threshold:

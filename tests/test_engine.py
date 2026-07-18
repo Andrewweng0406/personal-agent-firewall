@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.config import ProtectedPathEntry, Settings
+from app.risk.cross_agent_correlation import CrossAgentSignal
 from app.risk.engine import assess_risk
 from app.risk.llm_translator import LlmRiskResult
 
@@ -98,3 +99,39 @@ def test_aligned_intent_cannot_reduce_concrete_static_risk(tmp_path):
     assert assessment.score == 80
     assert assessment.behavior_lane == "red"
     assert len(llm.calls) == 1
+
+
+def test_cross_agent_correlation_forces_auto_contain_and_max_score(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=10, explanation="LLM thinks this is low risk")
+    cross_agent_signal = CrossAgentSignal(
+        correlated=True,
+        score_delta=100,
+        matched_rules=["cross_agent_correlation:coordinated_target"],
+        correlated_agent_ids=["agent-b", "agent-c"],
+        explanation="Another agent identity was already denied for the same target.",
+    )
+
+    assessment = assess_risk(
+        "search_web",
+        {"query": "harmless"},
+        settings,
+        llm,
+        cross_agent_signal=cross_agent_signal,
+    )
+
+    assert assessment.score == 100
+    assert assessment.auto_contain is True
+    assert assessment.correlated_agent_ids == ["agent-b", "agent-c"]
+    assert "cross_agent_correlation:coordinated_target" in assessment.matched_rules
+    assert assessment.plain_explanation == cross_agent_signal.explanation
+
+
+def test_no_cross_agent_signal_leaves_correlated_agent_ids_empty(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient()
+
+    assessment = assess_risk("search_web", {"query": "harmless"}, settings, llm)
+
+    assert assessment.correlated_agent_ids == []
+    assert assessment.auto_contain is False

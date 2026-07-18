@@ -16,6 +16,7 @@ from app.models import ContainmentRequest, DecisionRequest, ToolCallRequest, Too
 from app.privacy.shield import scan_and_redact
 from app.privacy.vector_store import SemanticPiiDetector
 from app.risk.behavior_chain import analyze_behavior_chain
+from app.risk.cross_agent_correlation import detect_cross_agent_pattern
 from app.risk.engine import assess_risk
 from app.risk.llm_translator import RiskLlmClient
 from app.state.audit_log import AuditLog
@@ -181,6 +182,10 @@ def build_router(state: GatewayState) -> APIRouter:
         behavior_signal = analyze_behavior_chain(
             request.tool_name, sanitized_args, history
         )
+        system_wide_recent = await state.audit_log.list_events(limit=50)
+        cross_agent_signal = detect_cross_agent_pattern(
+            request.agent_id, request.tool_name, sanitized_args, system_wide_recent
+        )
         assessment = await asyncio.to_thread(
             assess_risk,
             request.tool_name,
@@ -189,6 +194,7 @@ def build_router(state: GatewayState) -> APIRouter:
             state.llm_client,
             sanitized_intent,
             behavior_signal,
+            cross_agent_signal,
         )
 
         if assessment.auto_contain:
@@ -198,6 +204,23 @@ def build_router(state: GatewayState) -> APIRouter:
                 request.session_id,
                 assessment.plain_explanation,
             )
+            correlated_containments = []
+            for other_agent_id in assessment.correlated_agent_ids:
+                other_containment = await state.containment_store.quarantine(
+                    "agent",
+                    other_agent_id,
+                    None,
+                    "Coordinated with a denied action from another agent identity: "
+                    f"{assessment.plain_explanation}",
+                )
+                correlated_containments.append(other_containment)
+                await state.ws_manager.broadcast(
+                    {
+                        "type": "containment_changed",
+                        "action": "quarantined",
+                        **other_containment,
+                    }
+                )
             await _log(
                 state, request_id, request.agent_id, request.session_id,
                 request.tool_name, sanitized_args, assessment.score, assessment.level,
@@ -223,6 +246,7 @@ def build_router(state: GatewayState) -> APIRouter:
                 "chain_detected": True,
                 "auto_contained": True,
                 "containment": containment,
+                "correlated_agent_ids": assessment.correlated_agent_ids,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             await state.ws_manager.broadcast(alert)
@@ -250,6 +274,7 @@ def build_router(state: GatewayState) -> APIRouter:
                 intent_alignment="off_scope",
                 chain_detected=True,
                 containment_action="session_quarantined",
+                correlated_agent_ids=assessment.correlated_agent_ids,
             )
 
         if assessment.score < settings.risk_threshold:

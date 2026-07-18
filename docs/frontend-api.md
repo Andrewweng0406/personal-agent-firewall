@@ -125,7 +125,8 @@ Response body:
   "behavior_lane": "green",
   "intent_alignment": "aligned",
   "chain_detected": false,
-  "containment_action": null
+  "containment_action": null,
+  "correlated_agent_ids": []
 }
 ```
 
@@ -139,8 +140,11 @@ Response fields:
 | `reason` | string or `null` | Denial reason, timeout reason, or blocked-tool reason. |
 | `behavior_lane` | `"green"`, `"yellow"`, `"red"`, or `null` | Product-level lane for the action. |
 | `intent_alignment` | `"aligned"`, `"uncertain"`, `"off_scope"`, or `null` | Whether the action matches the user's stated task. |
-| `chain_detected` | boolean | Whether recent actions in the same session formed a dangerous sequence. |
+| `chain_detected` | boolean | Whether recent actions in the same session (or a correlated different agent) formed a dangerous sequence. |
 | `containment_action` | string or `null` | Automatic or existing containment that affected this call. |
+| `correlated_agent_ids` | string array | Other agent identities whose recent denied activity targeted the same file/command as this call. Non-empty means this call was flagged (and, if `auto_contain`d, those other agents were also quarantined at `"agent"` scope) because of a cross-agent pattern, not just this session's own history. |
+
+When `correlated_agent_ids` is non-empty, render it distinctly from a same-session `chain_detected` event -- this is evidence of a *coordinated or replayed* attack across multiple agent identities, not one agent going rogue. Every agent listed there has already been quarantined at `"agent"` scope (all of their sessions, not just the one that triggered this call), so no separate action is needed to contain them.
 
 Important frontend behavior:
 

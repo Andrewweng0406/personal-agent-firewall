@@ -695,6 +695,83 @@ async def test_attack_chain_is_blocked_and_session_is_quarantined(tmp_path):
     assert compromised["chain_events"] == 1
 
 
+async def test_cross_agent_correlation_quarantines_both_agent_identities(tmp_path):
+    target = tmp_path / "project" / "reports" / "summary.csv"
+    target.parent.mkdir(parents=True)
+    target.write_text("q1 numbers")
+
+    state = await _build_state(tmp_path, blocked_tools=["rm"], critical_paths=[])
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # agent-a tries a blocked tool against the file -- immediately denied
+        # and logged, giving the correlation check something to find.
+        first_response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "rm",
+                "args": {"path": str(target)},
+                "agent_id": "agent-a",
+                "session_id": "session-a",
+            },
+        )
+        assert first_response.json()["status"] == "denied"
+
+        # agent-b is a completely different identity. On its own this
+        # read_file call is low-risk (no protected_paths configured, benign
+        # unrelated intent) -- only the cross-agent correlation should be
+        # what pushes it into a hold.
+        second_response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "read_file",
+                "args": {"path": str(target)},
+                "agent_id": "agent-b",
+                "session_id": "session-b",
+                "user_intent": "Just checking something unrelated",
+            },
+        )
+
+        # agent-a's identity is now quarantined system-wide, so even an
+        # unrelated benign call from a brand new session under that same
+        # agent is blocked.
+        blocked_followup = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "search_web",
+                "args": {"query": "harmless"},
+                "agent_id": "agent-a",
+                "session_id": "brand-new-session",
+            },
+        )
+
+    body = second_response.json()
+    assert body["status"] == "denied"
+    assert body["containment_action"] == "session_quarantined"
+    assert body["correlated_agent_ids"] == ["agent-a"]
+
+    active = await state.containment_store.list_active()
+    scope_by_agent = {row["agent_id"]: row["scope"] for row in active}
+    assert scope_by_agent.get("agent-a") == "agent"
+    assert scope_by_agent.get("agent-b") == "session"
+
+    correlated_containment_events = [
+        message
+        for message in state.ws_manager.broadcasts
+        if message.get("type") == "containment_changed" and message.get("agent_id") == "agent-a"
+    ]
+    assert correlated_containment_events
+    assert correlated_containment_events[0]["scope"] == "agent"
+
+    new_alert = next(
+        message for message in state.ws_manager.broadcasts if message.get("auto_contained") is True
+    )
+    assert new_alert["correlated_agent_ids"] == ["agent-a"]
+    assert blocked_followup.json()["status"] == "denied"
+
+
 async def test_manual_agent_quarantine_and_release_endpoints(tmp_path):
     state = await _build_state(tmp_path)
     app = _make_app(state)

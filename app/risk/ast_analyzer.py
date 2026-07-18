@@ -9,21 +9,21 @@ CODE_ARG_TOOLS = {"exec_python", "run_shell"}
 WRITE_TOOLS = {"write_file", "overwrite_file"}
 
 DANGEROUS_CALL_NAMES: dict[str, int] = {
-    "remove": 30,
-    "rmtree": 40,
+    "remove": 75,
+    "rmtree": 85,
     "rmdir": 30,
-    "unlink": 30,
-    "system": 35,
+    "unlink": 75,
+    "system": 80,
     "run": 20,
     "Popen": 25,
 }
 
 SHELL_DANGEROUS_PATTERNS: dict[str, int] = {
-    "rm -rf": 50,
-    "rm -r": 40,
+    "rm -rf": 90,
+    "rm -r": 75,
     " rm ": 30,
-    "mkfs": 60,
-    "dd if=": 40,
+    "mkfs": 90,
+    "dd if=": 80,
     "> /dev/": 30,
     ":(){:|:&};:": 100,
 }

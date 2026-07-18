@@ -103,15 +103,30 @@ def test_no_duplicate_rules_when_path_and_command_match_same_file(tmp_path):
 def test_overlapping_shell_patterns_score_less_than_naive_sum(tmp_path):
     settings = _settings(tmp_path)
     score, rules = analyze("run_shell", {"command": "rm -rf /"}, settings)
-    # "rm -rf" (50), "rm -r" (40), and " rm " (30) all match "rm -rf /".
-    # The old buggy behavior summed-and-capped these to
-    # min(50 + 40 + 30, 100) = 100. The fixed behavior takes the max
-    # weight among matched patterns instead, which is 50 here. Asserting
-    # the exact value (rather than e.g. `score < 120`, which is satisfied
+    # "rm -rf" (90), "rm -r" (75), and " rm " (30) all match "rm -rf /".
+    # A buggy sum-and-cap implementation would give
+    # min(90 + 75 + 30, 100) = 100. The fixed behavior takes the max
+    # weight among matched patterns instead, which is 90 here. Asserting
+    # the exact value (rather than e.g. `score <= 100`, which is satisfied
     # by both the buggy and fixed behavior for this input) ensures this
     # test actually fails if the max-based fix regresses to summing.
-    assert score == 50
+    assert score == 90
     assert any("dangerous_shell" in rule for rule in rules)
+
+
+def test_destructive_rmtree_call_alone_crosses_risk_threshold(tmp_path):
+    """A single occurrence of an inherently destructive call (shutil.rmtree)
+    should score at or above the default risk_threshold (70) on its own,
+    with no protected-path match and no blocked_tools entry involved, so it
+    cannot silently auto-execute without human review."""
+    settings = _settings(tmp_path)
+    score, rules = analyze(
+        "exec_python",
+        {"code": "import shutil\nshutil.rmtree('/home/user/mydir')"},
+        settings,
+    )
+    assert score >= 70
+    assert any("rmtree" in rule for rule in rules)
 
 
 def test_envrc_not_flagged_as_protected_env_path(tmp_path):

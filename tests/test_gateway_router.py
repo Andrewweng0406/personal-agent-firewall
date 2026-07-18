@@ -219,6 +219,62 @@ async def test_high_risk_call_times_out_and_denies(tmp_path):
     assert target.read_text() == "<html>old</html>"
 
 
+async def test_high_risk_shell_call_backs_up_target_file(tmp_path):
+    """A run_shell call whose target file lives inside `command` (not a
+    `path` arg) must still get a real on-disk snapshot before the hold, the
+    same guarantee write_file/overwrite_file already had. Regression test
+    for the gap where only `sanitized_args.get("path")` triggered a backup.
+    """
+    target = tmp_path / "project" / "notes.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("important notes")
+
+    # Default critical_paths=[] here on purpose: this file is not a
+    # protected path. It's the "rm -rf" shell pattern alone (weight 90
+    # after recalibration) that must cross the risk threshold and trigger
+    # the backup -- proving the fix isn't piggybacking on protected-path
+    # scoring.
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def call():
+            return await client.post(
+                "/api/tool_call",
+                json={
+                    "tool_name": "run_shell",
+                    "args": {"command": f"rm -rf {target}"},
+                    "agent_id": "agent-1",
+                    "session_id": "s-1",
+                },
+            )
+
+        async def decide():
+            while not state.pending:
+                await asyncio.sleep(0.01)
+            request_id = next(iter(state.pending))
+            return await client.post(f"/api/decision/{request_id}", json={"decision": "deny"})
+
+        call_response, decide_response = await asyncio.gather(call(), decide())
+
+    assert decide_response.status_code == 200
+    assert call_response.json()["status"] == "denied"
+
+    new_alert_msg = next(msg for msg in state.ws_manager.broadcasts if msg["type"] == "new_alert")
+    backup_id = new_alert_msg.get("backup_id")
+    assert backup_id is not None
+
+    backup_path = tmp_path / "backups" / backup_id / target.name
+    assert backup_path.exists()
+    assert backup_path.read_text() == "important notes"
+
+    events = await state.audit_log.list_events()
+    assert events[0]["backup_id"] == backup_id
+
+
 async def test_pii_in_args_is_redacted_end_to_end(tmp_path):
     state = await _build_state(tmp_path)
     app = _make_app(state)

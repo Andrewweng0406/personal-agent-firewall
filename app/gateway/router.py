@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
@@ -38,6 +40,37 @@ class GatewayState:
         self.backup_manager = backup_manager
         self.ws_manager = ws_manager
         self.pending: dict[str, PendingDecision] = {}
+
+
+_SHELL_TOKEN_SPLIT = re.compile(r"[\s'\";|&()]+")
+
+
+def _extract_existing_paths_from_text(text: str) -> list[str]:
+    """Best-effort extraction of path-like tokens that exist on disk.
+
+    `run_shell` and `exec_python` calls carry their target file inside a
+    `command`/`code` string rather than a `path` arg, so the ordinary
+    `sanitized_args.get("path")` backup trigger never fires for them. This
+    splits the text on common shell/quote separators and keeps tokens that
+    look like a path (contain `/` or start with `.`) AND actually exist on
+    disk, so callers can back those files up too before a high-risk call
+    executes.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    for token in _SHELL_TOKEN_SPLIT.split(text):
+        if not token:
+            continue
+        if "/" not in token and not token.startswith("."):
+            continue
+        try:
+            exists = Path(token).exists()
+        except (OSError, ValueError):
+            exists = False
+        if exists and token not in found:
+            found.append(token)
+    return found
 
 
 async def _log(
@@ -101,7 +134,7 @@ def build_router(state: GatewayState) -> APIRouter:
             except HTTPException as exc:
                 await _log(
                     state, request_id, request.tool_name, sanitized_args,
-                    assessment.score, assessment.level, "allowed",
+                    assessment.score, assessment.level, "allowed_execution_failed",
                     f"Tool execution failed: {exc.detail}", None,
                 )
                 raise
@@ -111,10 +144,26 @@ def build_router(state: GatewayState) -> APIRouter:
             )
             return ToolCallResponse(status="allowed", result=result, risk_score=assessment.score)
 
-        backup_id = None
+        candidate_paths: list[str] = []
         path = sanitized_args.get("path")
         if path:
-            backup_id = await state.backup_manager.snapshot(path, request_id=request_id)
+            candidate_paths.append(path)
+        code_or_command = sanitized_args.get("code")
+        if not isinstance(code_or_command, str):
+            code_or_command = sanitized_args.get("command")
+        if isinstance(code_or_command, str):
+            for candidate in _extract_existing_paths_from_text(code_or_command):
+                if candidate not in candidate_paths:
+                    candidate_paths.append(candidate)
+
+        backup_ids: list[str] = []
+        for candidate in candidate_paths:
+            candidate_backup_id = await state.backup_manager.snapshot(
+                candidate, request_id=request_id
+            )
+            if candidate_backup_id:
+                backup_ids.append(candidate_backup_id)
+        backup_id = backup_ids[0] if backup_ids else None
 
         pending = PendingDecision()
         state.pending[request_id] = pending
@@ -151,7 +200,7 @@ def build_router(state: GatewayState) -> APIRouter:
             except HTTPException as exc:
                 await _log(
                     state, request_id, request.tool_name, sanitized_args,
-                    assessment.score, assessment.level, "allowed",
+                    assessment.score, assessment.level, "allowed_execution_failed",
                     f"Tool execution failed: {exc.detail}", backup_id,
                 )
                 await state.ws_manager.broadcast(

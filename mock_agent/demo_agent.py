@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+DECISION_TIMEOUT_SECONDS = int(os.getenv("DECISION_TIMEOUT_SECONDS", "120"))
 
 BENIGN_SCENARIO = {
     "tool_name": "search_web",
@@ -40,22 +43,54 @@ def prompt_injection_scenario(project_root: str) -> dict:
     }
 
 
+def seed_demo_fixtures(project_root: str) -> None:
+    """Create the files the demo scenarios expect to already exist.
+
+    Without these, scenario 2 (overwrite index.html) finds nothing to
+    snapshot -- `BackupManager.snapshot()` returns `None` for a
+    non-existent source file -- so the "backed up first" story in the
+    demo never materializes.
+    """
+    root = Path(project_root)
+    index_html = root / "src" / "index.html"
+    env_file = root / ".env"
+
+    index_html.parent.mkdir(parents=True, exist_ok=True)
+    if not index_html.exists():
+        index_html.write_text("<html><body>Original homepage</body></html>")
+
+    if not env_file.exists():
+        env_file.write_text("SECRET_KEY=do-not-leak")
+
+
 def main(
     base_url: str = "http://localhost:8000",
     project_root: str = "/tmp/agent_firewall_demo",
 ) -> None:
     import httpx
 
+    seed_demo_fixtures(project_root)
+
     with httpx.Client(base_url=base_url, timeout=150.0) as client:
         print("Scenario 1: benign search_web call")
         response = client.post("/api/tool_call", json=BENIGN_SCENARIO)
         print(response.json())
 
-        print("Scenario 2: dangerous overwrite of index.html")
+        print(
+            "Scenario 2: dangerous overwrite of index.html -- this call will "
+            f"HOLD for up to {DECISION_TIMEOUT_SECONDS}s waiting for a human "
+            "decision. POST to /api/decision/<request_id> (or connect the "
+            "WS-based frontend) to allow or deny it; otherwise it fails "
+            "closed (denied) once the timeout elapses."
+        )
         response = client.post("/api/tool_call", json=dangerous_overwrite_scenario(project_root))
         print(response.json())
 
-        print("Scenario 3: prompt-injection-triggered deletion of .env")
+        print(
+            "Scenario 3: prompt-injection-triggered deletion of .env -- this "
+            f"call will also HOLD for up to {DECISION_TIMEOUT_SECONDS}s "
+            "waiting for a human decision, same as scenario 2."
+        )
         response = client.post("/api/tool_call", json=prompt_injection_scenario(project_root))
         print(response.json())
 

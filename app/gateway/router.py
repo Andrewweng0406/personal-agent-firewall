@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.config import Settings
 from app.gateway import tool_executor
@@ -76,20 +77,32 @@ def _extract_existing_paths_from_text(text: str) -> list[str]:
 async def _log(
     state: GatewayState,
     request_id: str,
+    agent_id: str,
+    session_id: str,
     tool_name: str,
     args: dict,
     risk_score: int,
     risk_level: str,
+    behavior_lane: str,
+    intent_alignment: str,
+    user_intent: str | None,
+    matched_rules: list[str],
     decision: str,
     plain_explanation: str,
     backup_id: str | None,
 ) -> None:
     await state.audit_log.log_event(
         request_id=request_id,
+        agent_id=agent_id,
+        session_id=session_id,
         tool_name=tool_name,
         args=args,
         risk_score=risk_score,
         risk_level=risk_level,
+        behavior_lane=behavior_lane,
+        intent_alignment=intent_alignment,
+        user_intent=user_intent,
+        matched_rules=matched_rules,
         decision=decision,
         plain_explanation=plain_explanation,
         backup_id=backup_id,
@@ -114,18 +127,27 @@ def build_router(state: GatewayState) -> APIRouter:
         settings = state.settings
         request_id = str(uuid.uuid4())
         sanitized_args, _ = scan_and_redact(request.args)
+        sanitized_intent, _ = scan_and_redact(request.user_intent)
 
         if settings.is_blocked_tool(request.tool_name):
             await _log(
-                state, request_id, request.tool_name, sanitized_args,
-                100, "CRITICAL", "denied", "Tool is on the blocked list.", None,
+                state, request_id, request.agent_id, request.session_id,
+                request.tool_name, sanitized_args, 100, "CRITICAL", "red", "off_scope",
+                sanitized_intent, [f"blocked_tool:{request.tool_name}"], "denied",
+                "Tool is on the blocked list.", None,
             )
             return ToolCallResponse(
-                status="denied", reason="Tool is on the blocked list.", risk_score=100
+                status="denied", reason="Tool is on the blocked list.", risk_score=100,
+                behavior_lane="red", intent_alignment="off_scope",
             )
 
         assessment = await asyncio.to_thread(
-            assess_risk, request.tool_name, sanitized_args, settings, state.llm_client
+            assess_risk,
+            request.tool_name,
+            sanitized_args,
+            settings,
+            state.llm_client,
+            sanitized_intent,
         )
 
         if assessment.score < settings.risk_threshold:
@@ -133,16 +155,26 @@ def build_router(state: GatewayState) -> APIRouter:
                 result = await _execute_and_sanitize(request.tool_name, sanitized_args)
             except HTTPException as exc:
                 await _log(
-                    state, request_id, request.tool_name, sanitized_args,
-                    assessment.score, assessment.level, "allowed_execution_failed",
+                    state, request_id, request.agent_id, request.session_id,
+                    request.tool_name, sanitized_args, assessment.score, assessment.level,
+                    assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                    assessment.matched_rules, "allowed_execution_failed",
                     f"Tool execution failed: {exc.detail}", None,
                 )
                 raise
             await _log(
-                state, request_id, request.tool_name, sanitized_args,
-                assessment.score, assessment.level, "allowed", "", None,
+                state, request_id, request.agent_id, request.session_id,
+                request.tool_name, sanitized_args, assessment.score, assessment.level,
+                assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                assessment.matched_rules, "allowed", assessment.plain_explanation, None,
             )
-            return ToolCallResponse(status="allowed", result=result, risk_score=assessment.score)
+            return ToolCallResponse(
+                status="allowed",
+                result=result,
+                risk_score=assessment.score,
+                behavior_lane=assessment.behavior_lane,
+                intent_alignment=assessment.intent_alignment,
+            )
 
         candidate_paths: list[str] = []
         path = sanitized_args.get("path")
@@ -172,6 +204,9 @@ def build_router(state: GatewayState) -> APIRouter:
             {
                 "type": "new_alert",
                 "request_id": request_id,
+                "agent_id": request.agent_id,
+                "session_id": request.session_id,
+                "user_intent": sanitized_intent,
                 "tool_name": request.tool_name,
                 "args_summary": sanitized_args,
                 "risk_score": assessment.score,
@@ -179,6 +214,8 @@ def build_router(state: GatewayState) -> APIRouter:
                 "plain_explanation": assessment.plain_explanation,
                 "matched_rules": assessment.matched_rules,
                 "backup_id": backup_id,
+                "behavior_lane": assessment.behavior_lane,
+                "intent_alignment": assessment.intent_alignment,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -199,15 +236,29 @@ def build_router(state: GatewayState) -> APIRouter:
                 result = await _execute_and_sanitize(request.tool_name, sanitized_args)
             except HTTPException as exc:
                 await _log(
-                    state, request_id, request.tool_name, sanitized_args,
-                    assessment.score, assessment.level, "allowed_execution_failed",
+                    state, request_id, request.agent_id, request.session_id,
+                    request.tool_name, sanitized_args, assessment.score, assessment.level,
+                    assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                    assessment.matched_rules, "allowed_execution_failed",
                     f"Tool execution failed: {exc.detail}", backup_id,
                 )
                 await state.ws_manager.broadcast(
-                    {"type": "resolved", "request_id": request_id, "decision": "allowed"}
+                    {
+                        "type": "resolved",
+                        "request_id": request_id,
+                        "agent_id": request.agent_id,
+                        "session_id": request.session_id,
+                        "decision": "allowed",
+                    }
                 )
                 raise
-            outcome = ToolCallResponse(status="allowed", result=result, risk_score=assessment.score)
+            outcome = ToolCallResponse(
+                status="allowed",
+                result=result,
+                risk_score=assessment.score,
+                behavior_lane=assessment.behavior_lane,
+                intent_alignment=assessment.intent_alignment,
+            )
             final_decision = "allowed"
         else:
             reason = (
@@ -215,16 +266,30 @@ def build_router(state: GatewayState) -> APIRouter:
                 if timed_out
                 else "Denied by reviewer."
             )
-            outcome = ToolCallResponse(status="denied", reason=reason, risk_score=assessment.score)
+            outcome = ToolCallResponse(
+                status="denied",
+                reason=reason,
+                risk_score=assessment.score,
+                behavior_lane=assessment.behavior_lane,
+                intent_alignment=assessment.intent_alignment,
+            )
             final_decision = "denied"
 
         await _log(
-            state, request_id, request.tool_name, sanitized_args,
-            assessment.score, assessment.level, final_decision,
+            state, request_id, request.agent_id, request.session_id,
+            request.tool_name, sanitized_args, assessment.score, assessment.level,
+            assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+            assessment.matched_rules, final_decision,
             assessment.plain_explanation, backup_id,
         )
         await state.ws_manager.broadcast(
-            {"type": "resolved", "request_id": request_id, "decision": final_decision}
+            {
+                "type": "resolved",
+                "request_id": request_id,
+                "agent_id": request.agent_id,
+                "session_id": request.session_id,
+                "decision": final_decision,
+            }
         )
         return outcome
 
@@ -237,4 +302,103 @@ def build_router(state: GatewayState) -> APIRouter:
             pending.future.set_result(decision.decision)
         return {"ack": True}
 
+    @router.get("/api/events")
+    async def list_events(
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict:
+        rows = await state.audit_log.list_events(agent_id, session_id, limit)
+        events = []
+        for row in rows:
+            event = dict(row)
+            event["args"] = _decode_json(event.pop("args_json"), {})
+            event["matched_rules"] = _decode_json(
+                event.pop("matched_rules_json"), []
+            )
+            events.append(event)
+        return {"events": events, "count": len(events)}
+
+    @router.get("/api/dashboard/stats")
+    async def dashboard_stats(
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict:
+        rows = await state.audit_log.list_events(agent_id, session_id)
+        return _build_dashboard_stats(rows)
+
     return router
+
+
+def _decode_json(value: str, fallback):
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _increment(counter: dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
+
+def _rule_type(rule: str) -> str:
+    if rule.startswith("intent:"):
+        return ":".join(rule.split(":", 2)[:2])
+    return rule.split(":", 1)[0]
+
+
+def _build_dashboard_stats(rows: list[dict]) -> dict:
+    lane_counts = {lane: 0 for lane in ("green", "yellow", "red")}
+    risk_level_counts = {level: 0 for level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")}
+    decision_counts: dict[str, int] = {}
+    risk_type_counts: dict[str, int] = {}
+    agents: dict[str, dict] = {}
+
+    for row in rows:
+        lane = row.get("behavior_lane") or "yellow"
+        level = row.get("risk_level") or "LOW"
+        _increment(lane_counts, lane)
+        _increment(risk_level_counts, level)
+        _increment(decision_counts, row.get("decision") or "unknown")
+
+        for rule in _decode_json(row.get("matched_rules_json", "[]"), []):
+            _increment(risk_type_counts, _rule_type(rule))
+
+        current_agent = row.get("agent_id") or "unknown"
+        summary = agents.setdefault(
+            current_agent,
+            {
+                "agent_id": current_agent,
+                "total_events": 0,
+                "red_events": 0,
+                "denied_events": 0,
+                "risk_score_total": 0,
+                "last_seen": row.get("created_at"),
+            },
+        )
+        summary["total_events"] += 1
+        summary["red_events"] += int(lane == "red")
+        summary["denied_events"] += int(row.get("decision") == "denied")
+        summary["risk_score_total"] += row.get("risk_score") or 0
+
+    agent_summaries = []
+    for summary in agents.values():
+        score_total = summary.pop("risk_score_total")
+        summary["average_risk_score"] = round(score_total / summary["total_events"], 1)
+        agent_summaries.append(summary)
+    agent_summaries.sort(key=lambda item: (-item["red_events"], -item["average_risk_score"]))
+
+    risk_types = [
+        {"type": rule_type, "count": count}
+        for rule_type, count in sorted(
+            risk_type_counts.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+    return {
+        "total_events": len(rows),
+        "lane_counts": lane_counts,
+        "risk_level_counts": risk_level_counts,
+        "decision_counts": decision_counts,
+        "risk_type_counts": risk_types,
+        "agents": agent_summaries,
+    }

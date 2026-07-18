@@ -87,6 +87,33 @@ async def test_low_risk_call_is_allowed_immediately(tmp_path):
     assert state.pending == {}
 
 
+async def test_intent_aligned_low_risk_call_returns_green_lane(tmp_path):
+    target = tmp_path / "project" / "src" / "components" / "LoginButton.tsx"
+    target.parent.mkdir(parents=True)
+
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "write_file",
+                "args": {"path": str(target), "content": "export const LoginButton = () => null;"},
+                "agent_id": "agent-1",
+                "session_id": "s-1",
+                "user_intent": "Update the frontend login page button styling",
+            },
+        )
+
+    body = response.json()
+    assert body["status"] == "allowed"
+    assert body["behavior_lane"] == "green"
+    assert body["intent_alignment"] == "aligned"
+
+
 async def test_blocked_tool_is_denied_immediately(tmp_path):
     state = await _build_state(tmp_path)
     app = _make_app(state)
@@ -184,6 +211,106 @@ async def test_high_risk_call_denied_by_reviewer(tmp_path):
 
     assert call_response.json()["status"] == "denied"
     assert target.read_text() == "<html>old</html>"
+
+
+async def test_off_scope_secret_access_broadcasts_red_lane(tmp_path):
+    target = tmp_path / "project" / ".env"
+    target.parent.mkdir(parents=True)
+    target.write_text("SECRET_KEY=old")
+
+    state = await _build_state(
+        tmp_path,
+        critical_paths=[ProtectedPathEntry(path="/.env", risk_level="CRITICAL", auto_backup=True)],
+    )
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+
+        async def call():
+            return await client.post(
+                "/api/tool_call",
+                json={
+                    "tool_name": "write_file",
+                    "args": {"path": str(target), "content": "SECRET_KEY=new"},
+                    "agent_id": "agent-1",
+                    "session_id": "s-1",
+                    "user_intent": "Update the frontend login page button styling",
+                },
+            )
+
+        async def decide():
+            while not state.pending:
+                await asyncio.sleep(0.01)
+            request_id = next(iter(state.pending))
+            return await client.post(f"/api/decision/{request_id}", json={"decision": "deny"})
+
+        call_response, _decide_response = await asyncio.gather(call(), decide())
+
+    assert call_response.json()["status"] == "denied"
+    new_alert_msg = next(msg for msg in state.ws_manager.broadcasts if msg["type"] == "new_alert")
+    assert new_alert_msg["behavior_lane"] == "red"
+    assert new_alert_msg["intent_alignment"] == "off_scope"
+    assert new_alert_msg["agent_id"] == "agent-1"
+    assert new_alert_msg["session_id"] == "s-1"
+    assert new_alert_msg["user_intent"] == "Update the frontend login page button styling"
+    assert "intent:touches_secret" in new_alert_msg["matched_rules"]
+
+
+async def test_dashboard_endpoints_return_agent_and_risk_type_statistics(tmp_path):
+    target = tmp_path / "project" / "src" / "components" / "LoginButton.tsx"
+    target.parent.mkdir(parents=True)
+
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        allowed = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "write_file",
+                "args": {"path": str(target), "content": "export default null;"},
+                "agent_id": "frontend-agent",
+                "session_id": "session-ui",
+                "user_intent": "Update the frontend login page",
+            },
+        )
+        blocked = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "rm",
+                "args": {"path": str(target)},
+                "agent_id": "unsafe-agent",
+                "session_id": "session-risk",
+                "user_intent": "Update the frontend login page",
+            },
+        )
+        stats_response = await client.get("/api/dashboard/stats")
+        filtered_events_response = await client.get(
+            "/api/events", params={"agent_id": "unsafe-agent"}
+        )
+
+    assert allowed.json()["behavior_lane"] == "green"
+    assert blocked.json()["behavior_lane"] == "red"
+
+    stats = stats_response.json()
+    assert stats["total_events"] == 2
+    assert stats["lane_counts"] == {"green": 1, "yellow": 0, "red": 1}
+    assert {item["agent_id"] for item in stats["agents"]} == {
+        "frontend-agent",
+        "unsafe-agent",
+    }
+    assert {"type": "blocked_tool", "count": 1} in stats["risk_type_counts"]
+
+    filtered = filtered_events_response.json()
+    assert filtered["count"] == 1
+    assert filtered["events"][0]["agent_id"] == "unsafe-agent"
+    assert filtered["events"][0]["session_id"] == "session-risk"
+    assert filtered["events"][0]["matched_rules"] == ["blocked_tool:rm"]
+    assert "args_json" not in filtered["events"][0]
 
 
 async def test_high_risk_call_times_out_and_denies(tmp_path):

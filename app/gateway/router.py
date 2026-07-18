@@ -14,6 +14,7 @@ from app.gateway import tool_executor
 from app.gateway.tool_executor import ToolExecutionError
 from app.models import ContainmentRequest, DecisionRequest, ToolCallRequest, ToolCallResponse
 from app.privacy.shield import scan_and_redact
+from app.privacy.vector_store import SemanticPiiDetector
 from app.risk.behavior_chain import analyze_behavior_chain
 from app.risk.engine import assess_risk
 from app.risk.llm_translator import RiskLlmClient
@@ -37,6 +38,7 @@ class GatewayState:
         backup_manager: BackupManager,
         ws_manager: ConnectionManager,
         containment_store: ContainmentStore,
+        semantic_pii_detector: SemanticPiiDetector | None = None,
     ) -> None:
         self.settings = settings
         self.llm_client = llm_client
@@ -44,6 +46,7 @@ class GatewayState:
         self.backup_manager = backup_manager
         self.ws_manager = ws_manager
         self.containment_store = containment_store
+        self.semantic_pii_detector = semantic_pii_detector
         self.pending: dict[str, PendingDecision] = {}
 
 
@@ -114,12 +117,14 @@ async def _log(
     )
 
 
-async def _execute_and_sanitize(tool_name: str, args: dict):
+async def _execute_and_sanitize(
+    tool_name: str, args: dict, semantic_detector: SemanticPiiDetector | None = None
+):
     try:
         result = await asyncio.to_thread(tool_executor.execute, tool_name, args)
     except ToolExecutionError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    sanitized_result, _ = scan_and_redact(result)
+    sanitized_result, _ = await asyncio.to_thread(scan_and_redact, result, semantic_detector)
     return sanitized_result
 
 
@@ -130,8 +135,12 @@ def build_router(state: GatewayState) -> APIRouter:
     async def tool_call(request: ToolCallRequest) -> ToolCallResponse:
         settings = state.settings
         request_id = str(uuid.uuid4())
-        sanitized_args, _ = scan_and_redact(request.args)
-        sanitized_intent, _ = scan_and_redact(request.user_intent)
+        sanitized_args, _ = await asyncio.to_thread(
+            scan_and_redact, request.args, state.semantic_pii_detector
+        )
+        sanitized_intent, _ = await asyncio.to_thread(
+            scan_and_redact, request.user_intent, state.semantic_pii_detector
+        )
 
         active_containment = await state.containment_store.get_active(
             request.agent_id, request.session_id
@@ -245,7 +254,9 @@ def build_router(state: GatewayState) -> APIRouter:
 
         if assessment.score < settings.risk_threshold:
             try:
-                result = await _execute_and_sanitize(request.tool_name, sanitized_args)
+                result = await _execute_and_sanitize(
+                    request.tool_name, sanitized_args, state.semantic_pii_detector
+                )
             except HTTPException as exc:
                 await _log(
                     state, request_id, request.agent_id, request.session_id,
@@ -329,7 +340,9 @@ def build_router(state: GatewayState) -> APIRouter:
 
         if decision == "allow":
             try:
-                result = await _execute_and_sanitize(request.tool_name, sanitized_args)
+                result = await _execute_and_sanitize(
+                    request.tool_name, sanitized_args, state.semantic_pii_detector
+                )
             except HTTPException as exc:
                 await _log(
                     state, request_id, request.agent_id, request.session_id,
@@ -403,7 +416,9 @@ def build_router(state: GatewayState) -> APIRouter:
     @router.post("/api/containment/quarantine")
     async def quarantine(request: ContainmentRequest) -> dict:
         _validate_containment_request(request)
-        sanitized_reason, _ = scan_and_redact(request.reason)
+        sanitized_reason, _ = await asyncio.to_thread(
+            scan_and_redact, request.reason, state.semantic_pii_detector
+        )
         containment = await state.containment_store.quarantine(
             request.scope, request.agent_id, request.session_id, sanitized_reason
         )

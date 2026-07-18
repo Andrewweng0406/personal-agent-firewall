@@ -33,7 +33,9 @@ class RecordingWsManager:
         self.broadcasts.append(message)
 
 
-async def _build_state(tmp_path: Path, **settings_overrides) -> GatewayState:
+async def _build_state(
+    tmp_path: Path, semantic_pii_detector=None, **settings_overrides
+) -> GatewayState:
     audit_log = AuditLog(tmp_path / "audit.db")
     await audit_log.init_db()
     backup_manager = BackupManager(tmp_path / "backups", audit_log)
@@ -60,6 +62,7 @@ async def _build_state(tmp_path: Path, **settings_overrides) -> GatewayState:
         backup_manager=backup_manager,
         ws_manager=RecordingWsManager(),
         containment_store=containment_store,
+        semantic_pii_detector=semantic_pii_detector,
     )
 
 
@@ -471,6 +474,39 @@ async def test_pii_in_args_is_redacted_end_to_end(tmp_path):
     assert len(events) == 1
     assert "someone@example.com" not in events[0]["args_json"]
     assert "[REDACTED:EMAIL]" in events[0]["args_json"]
+
+
+async def test_semantic_pii_with_no_fixed_format_is_redacted_end_to_end(tmp_path):
+    from app.privacy.vector_store import SemanticPiiDetector
+
+    state = await _build_state(
+        tmp_path, semantic_pii_detector=SemanticPiiDetector(distance_threshold=0.6)
+    )
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "search_web",
+                "args": {
+                    "query": "Here is my private key for the crypto wallet, please keep it safe"
+                },
+                "agent_id": "agent-1",
+                "session_id": "s-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert "crypto wallet" not in response.text
+    assert "[REDACTED:SEMANTIC_MATCH]" in response.text
+
+    events = await state.audit_log.list_events()
+    assert len(events) == 1
+    assert "crypto wallet" not in events[0]["args_json"]
+    assert "[REDACTED:SEMANTIC_MATCH]" in events[0]["args_json"]
 
 
 async def test_decision_for_unknown_request_id_returns_404(tmp_path):

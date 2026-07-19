@@ -7,8 +7,11 @@ restore files from automatic snapshots.
 
 ## Setup
 
-    pip install -r requirements.txt
+    pip install -r requirements.lock
     cp .env.example .env   # fill in ANTHROPIC_API_KEY or OPENAI_API_KEY
+
+Use `requirements.lock` for reproducible installs. `requirements.txt` retains
+compatible lower bounds for dependency review and intentional upgrades.
 
 Set `LLM_PROVIDER=anthropic` or `LLM_PROVIDER=openai` in `.env` to choose
 which model generates the plain-language risk explanations. Only one key is
@@ -224,3 +227,9 @@ only entries whose command points to this firewall's hook adapters.
 
 See `docs/frontend-api.md` for the full REST/WebSocket contract used by the
 frontend.
+
+## Contributing and security
+
+See `CONTRIBUTING.md` before opening a pull request. Report vulnerabilities
+privately using the process in `SECURITY.md`. This project is licensed under
+Apache License 2.0; see `LICENSE`.

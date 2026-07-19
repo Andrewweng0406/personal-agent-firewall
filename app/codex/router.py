@@ -54,7 +54,12 @@ def build_codex_router(state: GatewayState) -> APIRouter:
             json.dumps({"tool_input": request.tool_input, "tool_response": request.tool_response}),
             matches,
         )
-        action = "deny" if assessment.score >= state.settings.risk_threshold else "recorded"
+        action = (
+            "deny"
+            if state.settings.firewall_mode != "observe"
+            and assessment.score >= state.settings.risk_threshold
+            else "recorded"
+        )
         reason = (
             "The tool result was withheld because it contains sensitive data."
             if action == "deny"
@@ -132,7 +137,10 @@ async def _handle_user_prompt(
     active_containment = await state.containment_store.get_active(
         request.agent_id, request.session_id
     )
-    if active_containment:
+    if state.settings.firewall_mode == "observe":
+        action = "allow"
+        reason = None
+    elif active_containment:
         scope = active_containment["scope"]
         reason = f"The {scope} is quarantined: {active_containment['reason']}"
         action = "deny"
@@ -145,6 +153,9 @@ async def _handle_user_prompt(
     elif assessment.score < state.settings.risk_threshold:
         action = "allow"
         reason = None
+    elif state.settings.firewall_mode == "enforce":
+        action = "deny"
+        reason = assessment.explanation or "Prompt denied automatically by enforce mode."
     else:
         pending = PendingDecision()
         state.pending[event_id] = pending
@@ -233,7 +244,10 @@ async def _handle_assistant_response(
     assessment: ConversationAssessment,
     created_at: str,
 ) -> CodexEventResponse:
-    needs_correction = assessment.score >= state.settings.risk_threshold
+    needs_correction = (
+        state.settings.firewall_mode != "observe"
+        and assessment.score >= state.settings.risk_threshold
+    )
     if needs_correction and not request.stop_hook_active:
         action = "continue"
         reason = (
@@ -300,6 +314,9 @@ async def _store_event(
         action=action,
         explanation=explanation,
         created_at=created_at,
+        source=request.source,
+        tool_use_id=request.tool_use_id,
+        phase=request.phase or _phase_for_event(request.event_type),
     )
 
 
@@ -314,6 +331,9 @@ async def _broadcast_event(
             "type": "codex_event",
             "event_id": response.event_id,
             "event_type": request.event_type,
+            "source": request.source,
+            "phase": request.phase or _phase_for_event(request.event_type),
+            "tool_use_id": request.tool_use_id,
             "agent_id": request.agent_id,
             "session_id": request.session_id,
             "turn_id": request.turn_id,
@@ -339,6 +359,9 @@ def _decode_tool_row(row: dict) -> dict:
     return {
         "event_id": row["request_id"],
         "event_type": "pre_tool_use",
+        "source": row.get("source", "generic"),
+        "phase": row.get("phase", "before"),
+        "tool_use_id": row.get("tool_use_id"),
         "agent_id": row["agent_id"],
         "session_id": row["session_id"],
         "turn_id": None,
@@ -355,6 +378,14 @@ def _decode_tool_row(row: dict) -> dict:
         "explanation": row.get("plain_explanation"),
         "created_at": row["created_at"],
     }
+
+
+def _phase_for_event(event_type: str) -> str:
+    return {
+        "user_prompt": "prompt",
+        "assistant_response": "response",
+        "post_tool_use": "after",
+    }.get(event_type, "event")
 
 
 def _decode_json(value: Any, fallback: Any) -> Any:

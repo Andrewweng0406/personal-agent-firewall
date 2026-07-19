@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 FIREWALL_URL = os.getenv("AGENT_FIREWALL_URL", "http://127.0.0.1:8000").rstrip("/")
 HOOK_TIMEOUT_SECONDS = float(os.getenv("AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS", "170"))
 AGENT_ID = os.getenv("CODEX_FIREWALL_AGENT_ID", "codex-main")
+FIREWALL_MODE = os.getenv("FIREWALL_MODE", "review").strip().lower()
 
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
 Sender = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -51,6 +52,8 @@ def handle_hook(payload: dict[str, Any], sender: Sender = _post_json) -> dict[st
             return _handle_stop(payload, sender)
         return {}
     except Exception as exc:
+        if FIREWALL_MODE == "observe":
+            return {}
         if event_name == "UserPromptSubmit":
             return {
                 "decision": "block",
@@ -71,6 +74,8 @@ def _handle_user_prompt(payload: dict[str, Any], sender: Sender) -> dict[str, An
         {
             **_common_event(payload),
             "event_type": "user_prompt",
+            "source": "codex",
+            "phase": "prompt",
             "content": payload.get("prompt", ""),
         },
     )
@@ -101,6 +106,9 @@ def _handle_pre_tool(payload: dict[str, Any], sender: Sender) -> dict[str, Any]:
             "session_id": str(payload.get("session_id") or "unknown"),
             "turn_id": payload.get("turn_id"),
             "execute": False,
+            "source": "codex",
+            "tool_use_id": payload.get("tool_use_id"),
+            "phase": "before",
         },
     )
     if response.get("status") == "denied":
@@ -114,6 +122,9 @@ def _handle_post_tool(payload: dict[str, Any], sender: Sender) -> dict[str, Any]
         {
             **_common_event(payload),
             "event_type": "post_tool_use",
+            "source": "codex",
+            "phase": "after",
+            "tool_use_id": payload.get("tool_use_id"),
             "tool_name": payload.get("tool_name"),
             "tool_input": _dict_or_wrapped(payload.get("tool_input")),
             "tool_response": payload.get("tool_response"),
@@ -133,6 +144,8 @@ def _handle_stop(payload: dict[str, Any], sender: Sender) -> dict[str, Any]:
         {
             **_common_event(payload),
             "event_type": "assistant_response",
+            "source": "codex",
+            "phase": "response",
             "content": payload.get("last_assistant_message") or "",
             "stop_hook_active": bool(payload.get("stop_hook_active")),
         },
@@ -164,6 +177,9 @@ def normalize_tool_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         return "run_shell", {
             "command": str(tool_input.get("command") or ""),
             "_codex_tool_name": codex_name,
+            "_source": "codex",
+            "_tool_use_id": payload.get("tool_use_id"),
+            "_phase": "before",
         }
 
     if codex_name == "apply_patch":
@@ -181,6 +197,9 @@ def normalize_tool_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
             "command": command,
             "paths": paths,
             "_codex_tool_name": codex_name,
+            "_source": "codex",
+            "_tool_use_id": payload.get("tool_use_id"),
+            "_phase": "before",
         }
         if paths:
             args["path"] = paths[0]
@@ -188,6 +207,9 @@ def normalize_tool_call(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
     args = dict(tool_input)
     args["_codex_tool_name"] = codex_name
+    args["_source"] = "codex"
+    args["_tool_use_id"] = payload.get("tool_use_id")
+    args["_phase"] = "before"
     return codex_name, args
 
 
@@ -214,10 +236,14 @@ def main() -> None:
     except Exception as exc:
         # Unknown/malformed input cannot be classified as a post-event, so
         # fail closed rather than silently bypassing the firewall.
-        result = {
-            "decision": "block",
-            "reason": f"Agent Firewall hook failed closed: {exc}",
-        }
+        result = (
+            {}
+            if FIREWALL_MODE == "observe"
+            else {
+                "decision": "block",
+                "reason": f"Agent Firewall hook failed closed: {exc}",
+            }
+        )
     sys.stdout.write(json.dumps(result))
 
 

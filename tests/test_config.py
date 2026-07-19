@@ -103,3 +103,29 @@ def test_load_settings_reads_openai_provider_and_key(tmp_path: Path, monkeypatch
 
     assert settings.llm_provider == "openai"
     assert settings.openai_api_key == "sk-test-openai-key"
+
+
+def test_load_settings_reads_firewall_mode(tmp_path: Path, monkeypatch):
+    data = {"critical_paths": [], "allowed_tools": [], "blocked_tools": []}
+    file_path = tmp_path / "protected_paths.json"
+    file_path.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setenv("PROTECTED_PATHS_FILE", str(file_path))
+    monkeypatch.setenv("FIREWALL_MODE", "Observe")
+
+    settings = load_settings()
+
+    assert settings.firewall_mode == "observe"
+
+
+def test_invalid_firewall_mode_falls_back_to_review(tmp_path: Path, monkeypatch):
+    data = {"critical_paths": [], "allowed_tools": [], "blocked_tools": []}
+    file_path = tmp_path / "protected_paths.json"
+    file_path.write_text(json.dumps(data), encoding="utf-8")
+
+    monkeypatch.setenv("PROTECTED_PATHS_FILE", str(file_path))
+    monkeypatch.setenv("FIREWALL_MODE", "invalid")
+
+    settings = load_settings()
+
+    assert settings.firewall_mode == "review"

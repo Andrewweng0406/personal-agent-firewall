@@ -186,6 +186,65 @@ async def test_blocked_tool_is_denied_immediately(tmp_path):
     assert "blocked" in body["reason"].lower()
 
 
+async def test_observe_mode_records_blocked_tool_without_denial(tmp_path):
+    state = await _build_state(tmp_path, firewall_mode="observe")
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "rm",
+                "args": {},
+                "agent_id": "agent-1",
+                "session_id": "s-1",
+                "execute": False,
+            },
+        )
+        events = await client.get("/api/events", params={"session_id": "s-1"})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "allowed"
+    assert state.pending == {}
+    assert events.json()["events"][0]["decision"] == "observed"
+    assert events.json()["events"][0]["risk_score"] == 100
+
+
+async def test_enforce_mode_denies_high_risk_without_pending_review(tmp_path):
+    target = tmp_path / "project" / ".env"
+    target.parent.mkdir(parents=True)
+    target.write_text("SECRET=value")
+    state = await _build_state(
+        tmp_path,
+        firewall_mode="enforce",
+        critical_paths=[
+            ProtectedPathEntry(path="/.env", risk_level="CRITICAL", auto_backup=True)
+        ],
+    )
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "write_file",
+                "args": {"path": str(target), "content": "changed"},
+                "agent_id": "agent-1",
+                "session_id": "s-1",
+                "execute": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "denied"
+    assert state.pending == {}
+    assert target.read_text() == "SECRET=value"
+
+
 async def test_high_risk_call_waits_then_allows(tmp_path):
     target = tmp_path / "project" / "src" / "index.html"
     target.parent.mkdir(parents=True)

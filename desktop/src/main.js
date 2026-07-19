@@ -8,7 +8,7 @@ const desktopRoot = path.resolve(__dirname, '..');
 const backendUrl = (process.env.AGENT_FIREWALL_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 const wsUrl = backendUrl.replace(/^http/, 'ws') + '/ws/alerts';
 const smokeMode = process.argv.includes('--smoke-test');
-const resetDataOnLaunch = !smokeMode && process.env.FIREWORKS_RESET_ON_LAUNCH !== '0';
+const resetDataOnLaunch = !smokeMode && process.env.FIREWALL_RESET_ON_LAUNCH === '1';
 
 let mainWindow = null;
 let backendProcess = null;

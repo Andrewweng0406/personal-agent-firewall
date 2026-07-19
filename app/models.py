@@ -19,6 +19,9 @@ class ToolCallRequest(BaseModel):
     user_intent: str | None = None
     turn_id: str | None = None
     execute: bool = True
+    source: str = "generic"
+    tool_use_id: str | None = None
+    phase: str = "before"
 
 
 class ToolCallResponse(BaseModel):
@@ -74,6 +77,9 @@ class CodexEventRequest(BaseModel):
     tool_input: dict[str, Any] = Field(default_factory=dict)
     tool_response: Any | None = None
     stop_hook_active: bool = False
+    source: str = "codex"
+    tool_use_id: str | None = None
+    phase: str | None = None
 
 
 class CodexEventResponse(BaseModel):

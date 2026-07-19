@@ -56,3 +56,23 @@ def test_websocket_alerts_endpoint_connects(tmp_path, monkeypatch):
     with TestClient(main_module.app) as client:
         with client.websocket_connect("/ws/alerts") as websocket:
             websocket.close()
+
+
+def test_health_reports_runtime_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTECTED_PATHS_FILE", str(_write_protected_paths(tmp_path)))
+    monkeypatch.setenv("AUDIT_DB_PATH", str(tmp_path / "audit.db"))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("FIREWALL_MODE", "observe")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    import app.main as main_module
+
+    importlib.reload(main_module)
+
+    with TestClient(main_module.app) as client:
+        response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["mode"] == "observe"
+    assert response.json()["pending_reviews"] == 0

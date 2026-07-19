@@ -14,6 +14,12 @@ Set `LLM_PROVIDER=anthropic` or `LLM_PROVIDER=openai` in `.env` to choose
 which model generates the plain-language risk explanations. Only one key is
 required for the provider you pick.
 
+Set `FIREWALL_MODE=observe`, `review`, or `enforce` to choose the runtime
+policy. `review` preserves the original approval workflow. `observe` records
+and scores every action without blocking it, and fails open if the backend is
+unavailable. `enforce` automatically denies calls at or above the effective
+risk threshold. The default is `review` for backward compatibility.
+
 ## Run the server
 
     uvicorn app.main:app --reload
@@ -38,10 +44,10 @@ stops that child process when the desktop app exits. To use another backend,
 set `AGENT_FIREWALL_URL` before launching Electron. To use another Python
 executable, set `FIREWALL_PYTHON`.
 
-For repeatable demos, the desktop app clears recorded chat/tool activity,
-containments, and backup database records on each launch. Physical files under
-`backups/` are retained. Set `FIREWORKS_RESET_ON_LAUNCH=0` before starting the
-desktop app to preserve usage history between launches.
+The desktop app preserves recorded activity by default. For a repeatable demo,
+set `FIREWALL_RESET_ON_LAUNCH=1` before starting it. This clears recorded
+chat/tool activity, containments, and backup database records while retaining
+physical files under `backups/`.
 
 ## Run the tests
 

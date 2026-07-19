@@ -119,6 +119,13 @@ async def _log(
         plain_explanation=plain_explanation,
         backup_id=backup_id,
         created_at=datetime.now(timezone.utc).isoformat(),
+        source=str(args.get("_source") or "generic"),
+        tool_use_id=(
+            str(args["_tool_use_id"])
+            if args.get("_tool_use_id") is not None
+            else None
+        ),
+        phase=str(args.get("_phase") or "before"),
     )
 
 
@@ -148,6 +155,9 @@ def build_router(state: GatewayState) -> APIRouter:
         sanitized_args, _ = await asyncio.to_thread(
             scan_and_redact, request.args, state.semantic_pii_detector
         )
+        sanitized_args.setdefault("_source", request.source)
+        sanitized_args.setdefault("_tool_use_id", request.tool_use_id)
+        sanitized_args.setdefault("_phase", request.phase)
         sanitized_intent, _ = await asyncio.to_thread(
             scan_and_redact, requested_intent, state.semantic_pii_detector
         )
@@ -155,7 +165,7 @@ def build_router(state: GatewayState) -> APIRouter:
         active_containment = await state.containment_store.get_active(
             request.agent_id, request.session_id
         )
-        if active_containment:
+        if active_containment and settings.firewall_mode != "observe":
             scope = active_containment["scope"]
             reason = f"The {scope} is quarantined: {active_containment['reason']}"
             await _log(
@@ -173,7 +183,7 @@ def build_router(state: GatewayState) -> APIRouter:
                 containment_action=f"{scope}_quarantined",
             )
 
-        if settings.is_blocked_tool(request.tool_name):
+        if settings.is_blocked_tool(request.tool_name) and settings.firewall_mode != "observe":
             await _log(
                 state, request_id, request.agent_id, request.session_id,
                 request.tool_name, sanitized_args, 100, "CRITICAL", "red", "off_scope",
@@ -209,6 +219,54 @@ def build_router(state: GatewayState) -> APIRouter:
             trust_profile.effective_threshold,
             trust_profile.trust_score,
         )
+
+        if settings.firewall_mode == "observe":
+            result = None
+            if request.execute:
+                try:
+                    result = await _execute_and_sanitize(
+                        request.tool_name, request.args, state.semantic_pii_detector
+                    )
+                except HTTPException as exc:
+                    await _log(
+                        state, request_id, request.agent_id, request.session_id,
+                        request.tool_name, sanitized_args, assessment.score, assessment.level,
+                        assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                        assessment.matched_rules, "observed_execution_failed",
+                        f"Tool execution failed: {exc.detail}", None,
+                    )
+                    raise
+            await _log(
+                state, request_id, request.agent_id, request.session_id,
+                request.tool_name, sanitized_args, assessment.score, assessment.level,
+                assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                assessment.matched_rules, "observed", assessment.plain_explanation, None,
+            )
+            await state.ws_manager.broadcast(
+                {
+                    "type": "observed_risk",
+                    "request_id": request_id,
+                    "agent_id": request.agent_id,
+                    "session_id": request.session_id,
+                    "tool_name": request.tool_name,
+                    "risk_score": assessment.score,
+                    "risk_level": assessment.level,
+                    "plain_explanation": assessment.plain_explanation,
+                    "matched_rules": assessment.matched_rules,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            return ToolCallResponse(
+                status="allowed",
+                result=result,
+                risk_score=assessment.score,
+                reason=assessment.plain_explanation or None,
+                behavior_lane=assessment.behavior_lane,
+                intent_alignment=assessment.intent_alignment,
+                chain_detected=assessment.chain_detected,
+                trust_score=assessment.trust_score,
+                effective_threshold=assessment.effective_threshold,
+            )
 
         if assessment.auto_contain:
             containment = await state.containment_store.quarantine(
@@ -288,6 +346,37 @@ def build_router(state: GatewayState) -> APIRouter:
                 chain_detected=True,
                 containment_action="session_quarantined",
                 correlated_agent_ids=assessment.correlated_agent_ids,
+                trust_score=assessment.trust_score,
+                effective_threshold=assessment.effective_threshold,
+            )
+
+        if (
+            settings.firewall_mode == "enforce"
+            and assessment.score >= assessment.effective_threshold
+        ):
+            reason = assessment.plain_explanation or "Denied automatically by enforce mode."
+            await _log(
+                state, request_id, request.agent_id, request.session_id,
+                request.tool_name, sanitized_args, assessment.score, assessment.level,
+                assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                assessment.matched_rules, "denied_enforced", reason, None,
+            )
+            await state.ws_manager.broadcast(
+                {
+                    "type": "resolved",
+                    "request_id": request_id,
+                    "agent_id": request.agent_id,
+                    "session_id": request.session_id,
+                    "decision": "denied_enforced",
+                }
+            )
+            return ToolCallResponse(
+                status="denied",
+                reason=reason,
+                risk_score=assessment.score,
+                behavior_lane=assessment.behavior_lane,
+                intent_alignment=assessment.intent_alignment,
+                chain_detected=assessment.chain_detected,
                 trust_score=assessment.trust_score,
                 effective_threshold=assessment.effective_threshold,
             )

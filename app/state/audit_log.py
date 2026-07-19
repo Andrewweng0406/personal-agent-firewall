@@ -21,7 +21,10 @@ CREATE TABLE IF NOT EXISTS events (
     decision TEXT NOT NULL,
     plain_explanation TEXT,
     backup_id TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'generic',
+    tool_use_id TEXT,
+    phase TEXT NOT NULL DEFAULT 'before'
 )
 """
 
@@ -55,7 +58,10 @@ CREATE TABLE IF NOT EXISTS codex_events (
     matched_rules_json TEXT NOT NULL DEFAULT '[]',
     action TEXT NOT NULL,
     explanation TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'codex',
+    tool_use_id TEXT,
+    phase TEXT NOT NULL DEFAULT 'event'
 )
 """
 
@@ -71,6 +77,7 @@ class AuditLog:
             await db.execute(CODEX_EVENTS_TABLE)
             await self._migrate_events_table(db)
             await self._migrate_backups_table(db)
+            await self._migrate_codex_events_table(db)
             await db.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_agent_created "
                 "ON events (agent_id, created_at DESC)"
@@ -99,6 +106,9 @@ class AuditLog:
             "intent_alignment": "TEXT NOT NULL DEFAULT 'uncertain'",
             "user_intent": "TEXT",
             "matched_rules_json": "TEXT NOT NULL DEFAULT '[]'",
+            "source": "TEXT NOT NULL DEFAULT 'generic'",
+            "tool_use_id": "TEXT",
+            "phase": "TEXT NOT NULL DEFAULT 'before'",
         }
         for column, definition in additions.items():
             if column not in existing:
@@ -114,6 +124,18 @@ class AuditLog:
         for column, definition in additions.items():
             if column not in existing:
                 await db.execute(f"ALTER TABLE backups ADD COLUMN {column} {definition}")
+
+    async def _migrate_codex_events_table(self, db: aiosqlite.Connection) -> None:
+        cursor = await db.execute("PRAGMA table_info(codex_events)")
+        existing = {row[1] for row in await cursor.fetchall()}
+        additions = {
+            "source": "TEXT NOT NULL DEFAULT 'codex'",
+            "tool_use_id": "TEXT",
+            "phase": "TEXT NOT NULL DEFAULT 'event'",
+        }
+        for column, definition in additions.items():
+            if column not in existing:
+                await db.execute(f"ALTER TABLE codex_events ADD COLUMN {column} {definition}")
 
     async def log_event(
         self,
@@ -132,14 +154,18 @@ class AuditLog:
         plain_explanation: str,
         backup_id: str | None,
         created_at: str,
+        source: str = "generic",
+        tool_use_id: str | None = None,
+        phase: str = "before",
     ) -> None:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 "INSERT OR REPLACE INTO events "
                 "(request_id, agent_id, session_id, tool_name, args_json, risk_score, "
                 "risk_level, behavior_lane, intent_alignment, user_intent, "
-                "matched_rules_json, decision, plain_explanation, backup_id, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "matched_rules_json, decision, plain_explanation, backup_id, created_at, "
+                "source, tool_use_id, phase) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     request_id,
                     agent_id,
@@ -156,6 +182,9 @@ class AuditLog:
                     plain_explanation,
                     backup_id,
                     created_at,
+                    source,
+                    tool_use_id,
+                    phase,
                 ),
             )
             await db.commit()
@@ -243,14 +272,18 @@ class AuditLog:
         action: str,
         explanation: str | None,
         created_at: str,
+        source: str = "codex",
+        tool_use_id: str | None = None,
+        phase: str = "event",
     ) -> None:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 "INSERT OR REPLACE INTO codex_events "
                 "(event_id, event_type, agent_id, session_id, turn_id, cwd, model, "
                 "permission_mode, content_redacted, tool_name, payload_json, risk_score, "
-                "risk_level, matched_rules_json, action, explanation, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "risk_level, matched_rules_json, action, explanation, created_at, source, "
+                "tool_use_id, phase) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event_id,
                     event_type,
@@ -269,6 +302,9 @@ class AuditLog:
                     action,
                     explanation,
                     created_at,
+                    source,
+                    tool_use_id,
+                    phase,
                 ),
             )
             await db.commit()

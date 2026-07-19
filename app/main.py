@@ -70,6 +70,18 @@ app.include_router(build_router(gateway_state))
 app.include_router(build_codex_router(gateway_state))
 
 
+@app.get("/api/health")
+async def health() -> dict:
+    return {
+        "status": "ok",
+        "mode": settings.firewall_mode,
+        "database": "ok",
+        "semantic_pii": "ready" if gateway_state.semantic_pii_detector else "initializing",
+        "llm_provider": settings.llm_provider,
+        "pending_reviews": len(gateway_state.pending),
+    }
+
+
 @app.websocket("/ws/alerts")
 async def ws_alerts(websocket: WebSocket) -> None:
     await ws_manager.connect(websocket)

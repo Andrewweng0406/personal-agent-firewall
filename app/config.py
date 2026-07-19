@@ -31,6 +31,7 @@ class Settings:
     blocked_tools: list[str] = field(default_factory=list)
     openai_api_key: str | None = None
     llm_provider: str = "anthropic"
+    firewall_mode: str = "review"
 
     def risk_level_for_path(self, path: str) -> str | None:
         for entry in self.critical_paths:
@@ -63,6 +64,9 @@ def load_protected_paths(
 def load_settings() -> Settings:
     protected_paths_file = BASE_DIR / os.getenv("PROTECTED_PATHS_FILE", "protected_paths.json")
     critical_paths, allowed_tools, blocked_tools = load_protected_paths(protected_paths_file)
+    firewall_mode = os.getenv("FIREWALL_MODE", "review").strip().lower()
+    if firewall_mode not in {"observe", "review", "enforce"}:
+        firewall_mode = "review"
     return Settings(
         risk_threshold=int(os.getenv("RISK_THRESHOLD", "70")),
         decision_timeout_seconds=int(os.getenv("DECISION_TIMEOUT_SECONDS", "120")),
@@ -74,4 +78,5 @@ def load_settings() -> Settings:
         blocked_tools=blocked_tools,
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         llm_provider=os.getenv("LLM_PROVIDER", "anthropic").strip().lower(),
+        firewall_mode=firewall_mode,
     )

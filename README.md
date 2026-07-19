@@ -144,6 +144,39 @@ Override the defaults with `AGENT_FIREWALL_URL`,
 hooks cover local function tools, including Bash, `apply_patch`, and MCP. Hosted
 tools such as Web Search are outside the current hook path.
 
+## Protect real Claude Code runs
+
+This repository also includes `.claude/settings.json`, which sends Claude
+Code lifecycle events through the same firewall backend:
+
+- `UserPromptSubmit` evaluates and records the incoming prompt.
+- `PreToolUse` evaluates Bash, Read, Write, Edit, MCP, and other tool calls
+  before Claude Code executes them.
+- `PostToolUse` records redacted successful tool results.
+- `PostToolUseFailure` records failed tool calls without blocking recovery.
+- `Stop` checks the final assistant response for sensitive data.
+
+Start the firewall before opening Claude Code in this repository:
+
+    uvicorn app.main:app --host 127.0.0.1 --port 8000
+    claude
+
+Claude Code loads project hooks from `.claude/settings.json`. Review and trust
+the project configuration when prompted. The adapter uses
+`${CLAUDE_PROJECT_DIR}` so it continues to work when Claude Code is launched
+from a nested directory.
+
+Incoming prompts and pre-tool checks fail closed if the backend is unavailable;
+post-tool, failure, and response telemetry fail open. Tool calls are evaluated
+with `execute: false`, so the firewall never executes a Claude Code tool itself.
+Claude Code remains the only executor after an allowed preflight check.
+
+Override the defaults with `AGENT_FIREWALL_URL`,
+`AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS`, and
+`CLAUDE_CODE_FIREWALL_AGENT_ID`. Claude Code events currently reuse the
+existing Codex event storage/API with a distinct `agent_id`; a future unified
+event schema can migrate both sources without changing the hook contract.
+
 ## API contract
 
 See `docs/frontend-api.md` for the full REST/WebSocket contract used by the

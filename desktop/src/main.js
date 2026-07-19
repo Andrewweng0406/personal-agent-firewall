@@ -1,16 +1,37 @@
 const { app, BrowserWindow, ipcMain, Menu, net } = require('electron');
 const { spawn } = require('node:child_process');
-const { existsSync } = require('node:fs');
+const { existsSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 
 const projectRoot = path.resolve(__dirname, '..', '..');
 const desktopRoot = path.resolve(__dirname, '..');
-const backendUrl = (process.env.AGENT_FIREWALL_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-const apiToken = process.env.AGENT_FIREWALL_TOKEN || '';
+
+function loadProjectEnv() {
+  const values = {};
+  try {
+    for (const rawLine of readFileSync(path.join(projectRoot, '.env'), 'utf8').split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const separator = line.indexOf('=');
+      if (separator < 1) continue;
+      const key = line.slice(0, separator).trim();
+      let value = line.slice(separator + 1).trim();
+      if (value.length >= 2 && ['"', "'"].includes(value[0]) && value.at(-1) === value[0]) {
+        value = value.slice(1, -1);
+      }
+      values[key] = value;
+    }
+  } catch { /* The .env file is optional. */ }
+  return values;
+}
+
+const runtimeEnv = { ...loadProjectEnv(), ...process.env };
+const backendUrl = (runtimeEnv.AGENT_FIREWALL_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+const apiToken = runtimeEnv.AGENT_FIREWALL_TOKEN || '';
 const wsToken = apiToken ? `?token=${encodeURIComponent(apiToken)}` : '';
 const wsUrl = backendUrl.replace(/^http/, 'ws') + '/ws/alerts' + wsToken;
 const smokeMode = process.argv.includes('--smoke-test');
-const resetDataOnLaunch = !smokeMode && process.env.FIREWALL_RESET_ON_LAUNCH === '1';
+const resetDataOnLaunch = !smokeMode && runtimeEnv.FIREWALL_RESET_ON_LAUNCH === '1';
 
 let mainWindow = null;
 let backendProcess = null;
@@ -172,7 +193,10 @@ async function backendIsReady() {
     const response = await net.fetch(`${backendUrl}/api/health`, {
       signal: controller.signal
     });
-    return response.ok;
+    if (!response.ok) return false;
+    const health = await response.json().catch(() => ({}));
+    return health.status === 'ok' && health.database === 'ok' &&
+      ['observe', 'review', 'enforce'].includes(health.mode);
   } catch {
     return false;
   } finally {
@@ -181,7 +205,7 @@ async function backendIsReady() {
 }
 
 function pythonCommand() {
-  if (process.env.FIREWALL_PYTHON) return process.env.FIREWALL_PYTHON;
+  if (runtimeEnv.FIREWALL_PYTHON) return runtimeEnv.FIREWALL_PYTHON;
   const executable = process.platform === 'win32' ? 'python.exe' : 'python';
   const virtualenvPython = path.join(
     projectRoot, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', executable

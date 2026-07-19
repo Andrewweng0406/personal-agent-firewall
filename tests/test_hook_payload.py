@@ -1,7 +1,8 @@
 import hashlib
 import json
+import os
 
-from integrations.hook_payload import bound_payload
+from integrations.hook_payload import bound_payload, load_project_env
 
 
 def _encoded(value):
@@ -47,3 +48,12 @@ def test_large_collections_are_bounded(monkeypatch):
     assert bounded["tool_name"] == "example"
     assert len(_encoded(bounded)) <= 4096
     assert bounded["_firewall_payload_meta"]["original_bytes"] > 4096
+
+
+def test_project_env_does_not_override_parent_environment(monkeypatch):
+    monkeypatch.setenv("AGENT_FIREWALL_URL", "http://parent.example")
+
+    values = load_project_env()
+
+    assert os.environ["AGENT_FIREWALL_URL"] == "http://parent.example"
+    assert isinstance(values, dict)

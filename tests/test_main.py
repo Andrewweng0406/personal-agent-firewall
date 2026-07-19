@@ -23,6 +23,7 @@ def test_app_boots_and_allows_low_risk_call(tmp_path, monkeypatch):
     monkeypatch.setenv("AUDIT_DB_PATH", str(tmp_path / "audit.db"))
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_FIREWALL_TOKEN", raising=False)
 
     import app.main as main_module
 
@@ -48,6 +49,7 @@ def test_websocket_alerts_endpoint_connects(tmp_path, monkeypatch):
     monkeypatch.setenv("AUDIT_DB_PATH", str(tmp_path / "audit.db"))
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_FIREWALL_TOKEN", raising=False)
 
     import app.main as main_module
 
@@ -65,6 +67,7 @@ def test_health_reports_runtime_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("FIREWALL_MODE", "observe")
     monkeypatch.delenv("SEMANTIC_PII_ENABLED", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_FIREWALL_TOKEN", raising=False)
 
     import app.main as main_module
 

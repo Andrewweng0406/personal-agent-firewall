@@ -10,15 +10,21 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
-    from integrations.hook_payload import bound_payload
+    from integrations.hook_payload import bound_payload, load_project_env
 except ModuleNotFoundError:  # Direct execution from the integrations directory.
-    from hook_payload import bound_payload
+    from hook_payload import bound_payload, load_project_env
 
-FIREWALL_URL = os.getenv("AGENT_FIREWALL_URL", "http://127.0.0.1:8000").rstrip("/")
-HOOK_TIMEOUT_SECONDS = float(os.getenv("AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS", "170"))
-AGENT_ID = os.getenv("CODEX_FIREWALL_AGENT_ID", "codex-main")
-FIREWALL_MODE = os.getenv("FIREWALL_MODE", "review").strip().lower()
-API_TOKEN = os.getenv("AGENT_FIREWALL_TOKEN")
+PROJECT_ENV = load_project_env()
+
+
+def _setting(name: str, default: str | None = None) -> str | None:
+    return os.getenv(name, PROJECT_ENV.get(name, default))
+
+FIREWALL_URL = (_setting("AGENT_FIREWALL_URL", "http://127.0.0.1:8000") or "").rstrip("/")
+HOOK_TIMEOUT_SECONDS = float(_setting("AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS", "170") or "170")
+AGENT_ID = _setting("CODEX_FIREWALL_AGENT_ID", "codex-main") or "codex-main"
+FIREWALL_MODE = (_setting("FIREWALL_MODE", "review") or "review").strip().lower()
+API_TOKEN = _setting("AGENT_FIREWALL_TOKEN")
 
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
 Sender = Callable[[str, dict[str, Any]], dict[str, Any]]

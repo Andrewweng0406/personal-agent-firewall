@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 DEFAULT_MAX_EVENT_BYTES = 1_048_576
@@ -10,6 +11,31 @@ DEFAULT_MAX_STRING_BYTES = 65_536
 _MIN_EVENT_BYTES = 4_096
 _MIN_STRING_BYTES = 128
 _MIN_COLLECTION_ITEMS = 8
+
+
+def load_project_env() -> dict[str, str]:
+    """Read this firewall checkout's .env without mutating process state."""
+    values: dict[str, str] = {}
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+_PROJECT_ENV = load_project_env()
 
 
 def bound_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -111,7 +137,7 @@ def _truncate_string(value: str, byte_limit: int) -> str:
 
 def _env_int(name: str, default: int, minimum: int) -> int:
     try:
-        return max(minimum, int(os.getenv(name, str(default))))
+        return max(minimum, int(os.getenv(name, _PROJECT_ENV.get(name, str(default)))))
     except ValueError:
         return default
 

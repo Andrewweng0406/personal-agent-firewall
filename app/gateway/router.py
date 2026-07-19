@@ -6,6 +6,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -14,7 +15,6 @@ from app.gateway import tool_executor
 from app.gateway.tool_executor import ToolExecutionError
 from app.models import ContainmentRequest, DecisionRequest, ToolCallRequest, ToolCallResponse
 from app.privacy.shield import scan_and_redact
-from app.privacy.vector_store import SemanticPiiDetector
 from app.risk.behavior_chain import analyze_behavior_chain
 from app.risk.cross_agent_correlation import detect_cross_agent_pattern
 from app.risk.trust_score import compute_trust_profile
@@ -24,6 +24,9 @@ from app.state.audit_log import AuditLog
 from app.state.backup_manager import BackupManager
 from app.state.containment import ContainmentStore
 from app.ws.manager import ConnectionManager
+
+if TYPE_CHECKING:
+    from app.privacy.vector_store import SemanticPiiDetector
 
 
 class PendingDecision:
@@ -72,7 +75,7 @@ def _extract_existing_paths_from_text(text: str) -> list[str]:
     for token in _SHELL_TOKEN_SPLIT.split(text):
         if not token:
             continue
-        if "/" not in token and not token.startswith("."):
+        if "/" not in token and "\\" not in token and not token.startswith("."):
             continue
         try:
             exists = Path(token).exists()
@@ -137,11 +140,16 @@ def build_router(state: GatewayState) -> APIRouter:
     async def tool_call(request: ToolCallRequest) -> ToolCallResponse:
         settings = state.settings
         request_id = str(uuid.uuid4())
+        requested_intent = request.user_intent
+        if requested_intent is None and request.turn_id:
+            requested_intent = await state.audit_log.latest_codex_prompt(
+                request.session_id, request.turn_id
+            )
         sanitized_args, _ = await asyncio.to_thread(
             scan_and_redact, request.args, state.semantic_pii_detector
         )
         sanitized_intent, _ = await asyncio.to_thread(
-            scan_and_redact, request.user_intent, state.semantic_pii_detector
+            scan_and_redact, requested_intent, state.semantic_pii_detector
         )
 
         active_containment = await state.containment_store.get_active(
@@ -285,19 +293,21 @@ def build_router(state: GatewayState) -> APIRouter:
             )
 
         if assessment.score < assessment.effective_threshold:
-            try:
-                result = await _execute_and_sanitize(
-                    request.tool_name, sanitized_args, state.semantic_pii_detector
-                )
-            except HTTPException as exc:
-                await _log(
-                    state, request_id, request.agent_id, request.session_id,
-                    request.tool_name, sanitized_args, assessment.score, assessment.level,
-                    assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
-                    assessment.matched_rules, "allowed_execution_failed",
-                    f"Tool execution failed: {exc.detail}", None,
-                )
-                raise
+            result = None
+            if request.execute:
+                try:
+                    result = await _execute_and_sanitize(
+                        request.tool_name, request.args, state.semantic_pii_detector
+                    )
+                except HTTPException as exc:
+                    await _log(
+                        state, request_id, request.agent_id, request.session_id,
+                        request.tool_name, sanitized_args, assessment.score, assessment.level,
+                        assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                        assessment.matched_rules, "allowed_execution_failed",
+                        f"Tool execution failed: {exc.detail}", None,
+                    )
+                    raise
             await _log(
                 state, request_id, request.agent_id, request.session_id,
                 request.tool_name, sanitized_args, assessment.score, assessment.level,
@@ -319,6 +329,13 @@ def build_router(state: GatewayState) -> APIRouter:
         path = sanitized_args.get("path")
         if path:
             candidate_paths.append(path)
+        paths = sanitized_args.get("paths")
+        if isinstance(paths, list):
+            candidate_paths.extend(
+                candidate
+                for candidate in paths
+                if isinstance(candidate, str) and candidate not in candidate_paths
+            )
         code_or_command = sanitized_args.get("code")
         if not isinstance(code_or_command, str):
             code_or_command = sanitized_args.get("command")
@@ -373,28 +390,30 @@ def build_router(state: GatewayState) -> APIRouter:
             state.pending.pop(request_id, None)
 
         if decision == "allow":
-            try:
-                result = await _execute_and_sanitize(
-                    request.tool_name, sanitized_args, state.semantic_pii_detector
-                )
-            except HTTPException as exc:
-                await _log(
-                    state, request_id, request.agent_id, request.session_id,
-                    request.tool_name, sanitized_args, assessment.score, assessment.level,
-                    assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
-                    assessment.matched_rules, "allowed_execution_failed",
-                    f"Tool execution failed: {exc.detail}", backup_id,
-                )
-                await state.ws_manager.broadcast(
-                    {
-                        "type": "resolved",
-                        "request_id": request_id,
-                        "agent_id": request.agent_id,
-                        "session_id": request.session_id,
-                        "decision": "allowed",
-                    }
-                )
-                raise
+            result = None
+            if request.execute:
+                try:
+                    result = await _execute_and_sanitize(
+                        request.tool_name, request.args, state.semantic_pii_detector
+                    )
+                except HTTPException as exc:
+                    await _log(
+                        state, request_id, request.agent_id, request.session_id,
+                        request.tool_name, sanitized_args, assessment.score, assessment.level,
+                        assessment.behavior_lane, assessment.intent_alignment, sanitized_intent,
+                        assessment.matched_rules, "allowed_execution_failed",
+                        f"Tool execution failed: {exc.detail}", backup_id,
+                    )
+                    await state.ws_manager.broadcast(
+                        {
+                            "type": "resolved",
+                            "request_id": request_id,
+                            "agent_id": request.agent_id,
+                            "session_id": request.session_id,
+                            "decision": "allowed",
+                        }
+                    )
+                    raise
             outcome = ToolCallResponse(
                 status="allowed",
                 result=result,

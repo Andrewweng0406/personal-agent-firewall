@@ -6,7 +6,7 @@ import os
 from app.config import Settings
 
 CODE_ARG_TOOLS = {"exec_python", "run_shell"}
-WRITE_TOOLS = {"write_file", "overwrite_file"}
+WRITE_TOOLS = {"write_file", "overwrite_file", "apply_patch"}
 
 DANGEROUS_CALL_NAMES: dict[str, int] = {
     "remove": 75,
@@ -41,6 +41,10 @@ def _contains_protected_path(text: str, path: str) -> bool:
     matching when the protected path is followed by a separator, more
     path segments, or the end of the string.
     """
+    # Codex may report Windows-native paths even when protected_paths.json
+    # uses portable forward slashes. Normalize separators before matching.
+    text = text.replace("\\", "/")
+    path = path.replace("\\", "/")
     start = 0
     while True:
         idx = text.find(path, start)
@@ -121,10 +125,19 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
     if settings.is_blocked_tool(tool_name):
         add_rule(f"blocked_tool:{tool_name}", 100)
 
+    paths: list[str] = []
     path = args.get("path")
-    if not isinstance(path, str):
-        path = None
-    if path:
+    if isinstance(path, str):
+        paths.append(path)
+    extra_paths = args.get("paths")
+    if isinstance(extra_paths, list):
+        paths.extend(
+            candidate
+            for candidate in extra_paths
+            if isinstance(candidate, str) and candidate not in paths
+        )
+
+    for path in paths:
         for rule, weight in _score_protected_paths_in_text(path, settings):
             add_rule(rule, weight)
 
@@ -137,6 +150,11 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
 
         if tool_name in WRITE_TOOLS and path_exists:
             add_rule(f"overwrite_existing_file:{path}", 20)
+
+    if tool_name == "apply_patch":
+        patch = args.get("command") or ""
+        if isinstance(patch, str) and "*** Delete File:" in patch:
+            add_rule("apply_patch:delete_file", 75)
 
     if tool_name in CODE_ARG_TOOLS:
         code = args.get("code") or args.get("command") or ""

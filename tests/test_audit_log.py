@@ -21,6 +21,7 @@ async def test_init_db_creates_tables(db_path):
 
     assert "events" in tables
     assert "backups" in tables
+    assert "codex_events" in tables
 
 
 async def test_log_event_and_list_events(db_path):
@@ -94,3 +95,34 @@ async def test_log_backup_inserts_row(db_path):
 
     assert row is not None
     assert row[1] == "/src/index.html"
+
+
+async def test_log_and_list_codex_event_redacted_content(db_path):
+    log = AuditLog(db_path)
+    await log.init_db()
+
+    await log.log_codex_event(
+        event_id="codex-1",
+        event_type="user_prompt",
+        agent_id="codex-main",
+        session_id="session-1",
+        turn_id="turn-1",
+        cwd="/project",
+        model="gpt-test",
+        permission_mode="default",
+        content_redacted="Use [REDACTED:API_KEY]",
+        tool_name=None,
+        payload={},
+        risk_score=100,
+        risk_level="CRITICAL",
+        matched_rules=["privacy:api_key"],
+        action="deny",
+        explanation="sensitive",
+        created_at="2026-07-18T00:00:00+00:00",
+    )
+
+    rows = await log.list_codex_events(session_id="session-1")
+
+    assert len(rows) == 1
+    assert rows[0]["content_redacted"] == "Use [REDACTED:API_KEY]"
+    assert await log.latest_codex_prompt("session-1", "turn-1") == "Use [REDACTED:API_KEY]"

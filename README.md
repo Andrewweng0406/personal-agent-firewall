@@ -86,6 +86,39 @@ server with a short timeout instead:
 reusable for wiring any LangChain (or plain function-calling) agent's tools
 through the firewall -- it is not specific to this demo script.
 
+## Protect real Codex runs
+
+This repository includes `.codex/hooks.json`, which routes the main Codex
+lifecycle through the firewall:
+
+- `UserPromptSubmit` sends the exact incoming prompt for inspection. Risky
+  prompts wait for the existing Allow/Deny reviewer flow.
+- `PreToolUse` evaluates Bash, `apply_patch`, MCP, and other supported local
+  tools without executing them. Codex executes an allowed tool exactly once.
+- `PostToolUse` records redacted tool results and withholds results containing
+  high-risk secrets from the model.
+- `Stop` records the main assistant response and requests one corrective pass
+  if the response exposes sensitive data.
+
+Start the firewall before starting a Codex run in this repository:
+
+    uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+Then open `/hooks` in Codex and trust the repository hook definition. Project
+hooks only load for trusted repositories. Incoming prompt and pre-tool checks
+fail closed if the server is unavailable; post-tool and response telemetry fail
+open so a completed action cannot trap the session in an outage loop.
+
+Only redacted prompt, response, and tool-result content is persisted. Inspect a
+session with:
+
+    curl "http://127.0.0.1:8000/api/codex/timeline?session_id=<codex-session-id>"
+
+Override the defaults with `AGENT_FIREWALL_URL`,
+`AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS`, and `CODEX_FIREWALL_AGENT_ID`. Codex
+hooks cover local function tools, including Bash, `apply_patch`, and MCP. Hosted
+tools such as Web Search are outside the current hook path.
+
 ## API contract
 
 See `docs/frontend-api.md` for the full REST/WebSocket contract used by the

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 RiskLevel = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 BehaviorLane = Literal["green", "yellow", "red"]
 IntentAlignment = Literal["aligned", "uncertain", "off_scope"]
+CodexEventType = Literal["user_prompt", "assistant_response", "post_tool_use"]
+CodexEventAction = Literal["allow", "deny", "continue", "recorded"]
 
 
 class ToolCallRequest(BaseModel):
@@ -15,6 +17,8 @@ class ToolCallRequest(BaseModel):
     agent_id: str
     session_id: str
     user_intent: str | None = None
+    turn_id: str | None = None
+    execute: bool = True
 
 
 class ToolCallResponse(BaseModel):
@@ -55,3 +59,28 @@ class ContainmentRequest(BaseModel):
     agent_id: str
     session_id: str | None = None
     reason: str = "Manually quarantined by reviewer."
+
+
+class CodexEventRequest(BaseModel):
+    event_type: CodexEventType
+    session_id: str
+    turn_id: str
+    agent_id: str = "codex-main"
+    cwd: str | None = None
+    model: str | None = None
+    permission_mode: str | None = None
+    content: str | None = None
+    tool_name: str | None = None
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    tool_response: Any | None = None
+    stop_hook_active: bool = False
+
+
+class CodexEventResponse(BaseModel):
+    event_id: str
+    action: CodexEventAction
+    reason: str | None = None
+    risk_score: int = 0
+    risk_level: RiskLevel = "LOW"
+    matched_rules: list[str] = Field(default_factory=list)
+    additional_context: str | None = None

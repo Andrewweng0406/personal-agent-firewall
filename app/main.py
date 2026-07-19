@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from app.codex.router import build_codex_router
 from app.config import load_settings
 from app.gateway.router import GatewayState, build_router
 from app.privacy.vector_store import SemanticPiiDetector
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Personal Agent Firewall", lifespan=lifespan)
 app.include_router(build_router(gateway_state))
+app.include_router(build_codex_router(gateway_state))
 
 
 @app.websocket("/ws/alerts")

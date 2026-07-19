@@ -392,6 +392,51 @@ Recommended dashboard mapping:
 
 `decision_counts` keys are the raw `decision` values written to the audit log, not just `"allowed"`/`"denied"` — they also include `allowed_execution_failed`, `denied_quarantined`, and `denied_auto_contained`. Do not hardcode a two-key mapping; sum every key that starts with `"denied"` if you want a single "denied" total, and every key that starts with `"allowed"` for an "allowed" total (this is exactly what `agents[].denied_events` already does server-side for the per-agent breakdown).
 
+### Codex Lifecycle Events
+
+Repo-local hooks send main Codex prompts, responses, and tool results to:
+
+```http
+POST /api/codex/event
+Content-Type: application/json
+```
+
+Prompt example:
+
+```json
+{
+  "event_type": "user_prompt",
+  "agent_id": "codex-main",
+  "session_id": "019f...",
+  "turn_id": "turn-1",
+  "cwd": "/project",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "default",
+  "content": "Update the login page"
+}
+```
+
+Responses use `event_type: "assistant_response"`; completed tool results use
+`event_type: "post_tool_use"` with `tool_name`, `tool_input`, and
+`tool_response`. Raw content is inspected in memory, while only the redacted
+form is stored.
+
+The response `action` is one of:
+
+- `allow`: let a prompt or response complete.
+- `deny`: block a prompt or withhold a sensitive tool result.
+- `continue`: ask Codex for one corrective response pass.
+- `recorded`: telemetry was stored without changing the run.
+
+List lifecycle records with `GET /api/codex/events`; filter by optional
+`session_id` and `turn_id`. `GET /api/codex/timeline?session_id=...` merges
+prompt, pre-tool decision, post-tool result, and assistant-response records in
+chronological order.
+
+Codex `PreToolUse` calls use `POST /api/tool_call` with `execute: false` and an
+optional `turn_id`. This runs the existing risk, containment, backup, trust,
+and reviewer pipeline without executing the tool inside the backend.
+
 ## WebSocket API
 
 Connect to:
@@ -400,12 +445,13 @@ Connect to:
 ws://127.0.0.1:8000/ws/alerts
 ```
 
-The backend sends four event types:
+The backend sends five event types:
 
 1. `new_alert`
 2. `resolved`
 3. `containment_changed`
 4. `backup_restored`
+5. `codex_event`
 
 ### new_alert
 
@@ -531,6 +577,32 @@ Emitted after a manual or automatic quarantine and after a release. Refresh `GET
 ### backup_restored
 
 Emitted after a successful restore. Mark the matching backup and event as restored.
+
+### codex_event
+
+Emitted after the firewall records or decides a main Codex lifecycle event:
+
+```json
+{
+  "type": "codex_event",
+  "event_id": "7b51a8f0-f03c-4216-92b4-18c2b66936b4",
+  "event_type": "assistant_response",
+  "agent_id": "codex-main",
+  "session_id": "019f...",
+  "turn_id": "turn-1",
+  "tool_name": null,
+  "action": "continue",
+  "risk_score": 100,
+  "risk_level": "CRITICAL",
+  "matched_rules": ["privacy:api_key"],
+  "reason": "Rewrite the answer without exposing credentials or sensitive personal data.",
+  "timestamp": "2026-07-18T08:45:00+00:00"
+}
+```
+
+Use this event for a live Codex timeline. Prompt approvals still arrive as the
+existing `new_alert` and `resolved` pair so the same reviewer UI can decide
+both prompt and tool-call holds.
 
 ## Frontend State Shape
 

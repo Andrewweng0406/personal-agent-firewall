@@ -1,0 +1,59 @@
+{
+  "description": "Route Codex prompts, responses, and local tool activity through Personal Agent Firewall.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "timeout": 180,
+            "statusMessage": "Checking prompt with Agent Firewall"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "timeout": 180,
+            "statusMessage": "Checking tool call with Agent Firewall"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "timeout": 180,
+            "statusMessage": "Recording tool result with Agent Firewall"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "timeout": 180,
+            "statusMessage": "Checking response with Agent Firewall"
+          }
+        ]
+      }
+    ]
+  }
+}

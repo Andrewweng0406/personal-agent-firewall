@@ -78,6 +78,8 @@ function createReviewWindow(alert) {
     minHeight: 540,
     resizable: true,
     alwaysOnTop: true,
+    show: false,
+    skipTaskbar: false,
     title: 'Firewall approval required',
     backgroundColor: '#0b1511',
     autoHideMenuBar: true,
@@ -89,10 +91,22 @@ function createReviewWindow(alert) {
     }
   });
 
+  // On macOS, alwaysOnTop only applies inside the window's current Space.
+  // Approval requests must follow the user to Codex, another desktop, or a
+  // full-screen app instead of silently remaining beside the dashboard.
+  popup.setAlwaysOnTop(true, 'floating');
+  popup.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   reviewWindows.set(alert.request_id, popup);
   popup.loadFile(path.join(desktopRoot, 'renderer', 'review.html'));
   popup.webContents.once('did-finish-load', () => {
     popup.webContents.send('review:set-alert', alert);
+    popup.show();
+    popup.focus();
+    popup.flashFrame(true);
+    if (process.platform === 'darwin') {
+      app.focus({ steal: true });
+      app.dock?.bounce('critical');
+    }
   });
   popup.on('closed', () => reviewWindows.delete(alert.request_id));
 }
@@ -307,6 +321,9 @@ app.whenReady().then(async () => {
         deny: document.querySelector('#deny-button')?.textContent,
         tool: document.querySelector('#review-tool')?.textContent
       })`);
+      reviewActions.visible = reviewWindow?.isVisible();
+      reviewActions.alwaysOnTop = reviewWindow?.isAlwaysOnTop();
+      reviewActions.allWorkspaces = reviewWindow?.isVisibleOnAllWorkspaces();
       const result = await mainWindow.webContents.executeJavaScript(`({
         title: document.title,
         brand: document.querySelector('.brand strong')?.textContent,
@@ -333,7 +350,8 @@ app.whenReady().then(async () => {
         result.activityNavigation?.overviewHidden &&
         result.activityNavigation?.activeNav === 'activity' &&
         reviewActions?.allow === 'Approve once' &&
-        reviewActions?.deny === 'Reject request' && reviewActions?.tool === 'write_file';
+        reviewActions?.deny === 'Reject request' && reviewActions?.tool === 'write_file' &&
+        reviewActions?.visible && reviewActions?.alwaysOnTop && reviewActions?.allWorkspaces;
       console.log(`DESKTOP_SMOKE ${JSON.stringify(result)}`);
       if (!valid) process.exitCode = 1;
     } catch (error) {

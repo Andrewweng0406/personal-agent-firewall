@@ -100,12 +100,13 @@ function createReviewWindow(alert) {
   popup.loadFile(path.join(desktopRoot, 'renderer', 'review.html'));
   popup.webContents.once('did-finish-load', () => {
     popup.webContents.send('review:set-alert', alert);
-    popup.show();
-    popup.focus();
+    // Show above every Space without stealing an in-progress click from the
+    // user's current app. The renderer also briefly disarms its buttons so a
+    // click that opened/approved another UI cannot become an accidental allow.
+    popup.showInactive();
     popup.flashFrame(true);
     if (process.platform === 'darwin') {
-      app.focus({ steal: true });
-      app.dock?.bounce('critical');
+      app.dock?.bounce('informational');
     }
   });
   popup.on('closed', () => reviewWindows.delete(alert.request_id));
@@ -314,12 +315,14 @@ app.whenReady().then(async () => {
         args_summary: { path: '/protected/file' }, auto_contained: false
       };
       createReviewWindow(smokeAlert);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 1100));
       const reviewWindow = reviewWindows.get(smokeAlert.request_id);
       const reviewActions = await reviewWindow?.webContents.executeJavaScript(`({
         allow: document.querySelector('#allow-button')?.textContent,
         deny: document.querySelector('#deny-button')?.textContent,
-        tool: document.querySelector('#review-tool')?.textContent
+        tool: document.querySelector('#review-tool')?.textContent,
+        buttonsArmed: !document.querySelector('#allow-button')?.disabled &&
+          !document.querySelector('#deny-button')?.disabled
       })`);
       reviewActions.visible = reviewWindow?.isVisible();
       reviewActions.alwaysOnTop = reviewWindow?.isAlwaysOnTop();
@@ -351,6 +354,7 @@ app.whenReady().then(async () => {
         result.activityNavigation?.activeNav === 'activity' &&
         reviewActions?.allow === 'Approve once' &&
         reviewActions?.deny === 'Reject request' && reviewActions?.tool === 'write_file' &&
+        reviewActions?.buttonsArmed &&
         reviewActions?.visible && reviewActions?.alwaysOnTop && reviewActions?.allWorkspaces;
       console.log(`DESKTOP_SMOKE ${JSON.stringify(result)}`);
       if (!valid) process.exitCode = 1;

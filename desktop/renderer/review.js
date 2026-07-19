@@ -1,5 +1,7 @@
 const api = window.firewallDesktop;
 let currentAlert = null;
+let armTimer = null;
+const ARM_DELAY_MS = 800;
 
 function text(id, value) {
   document.getElementById(id).textContent = value ?? '—';
@@ -25,6 +27,9 @@ async function decide(decision) {
 
 api.onReviewAlert((alert) => {
   currentAlert = alert;
+  setBusy(true);
+  clearTimeout(armTimer);
+  armTimer = setTimeout(() => setBusy(false), ARM_DELAY_MS);
   text('review-risk-level', `${alert.risk_level || 'HIGH'} RISK`);
   text('review-score', `${alert.risk_score ?? '—'} / 100`);
   text('review-explanation', alert.plain_explanation || 'This action requires a manual decision.');

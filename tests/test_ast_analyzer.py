@@ -100,6 +100,38 @@ def test_no_duplicate_rules_when_path_and_command_match_same_file(tmp_path):
     assert len(critical_env_rules) == 1
 
 
+def test_write_to_codex_hook_config_has_dedicated_tampering_rule(tmp_path):
+    score, rules = analyze(
+        "write_file",
+        {"path": "/home/user/.codex/hooks.json", "content": '{"hooks": {}}'},
+        _settings(tmp_path),
+    )
+
+    assert score == 100
+    assert "security_config_tampering:/.codex/hooks.json" in rules
+
+
+def test_shell_deletion_of_claude_settings_has_dedicated_tampering_rule(tmp_path):
+    score, rules = analyze(
+        "run_shell",
+        {"command": "rm -f ~/.claude/settings.json"},
+        _settings(tmp_path),
+    )
+
+    assert score == 100
+    assert "security_config_tampering:/.claude/settings.json" in rules
+
+
+def test_reading_security_config_is_not_mislabeled_as_tampering(tmp_path):
+    _score, rules = analyze(
+        "run_shell",
+        {"command": "cat ~/.codex/hooks.json"},
+        _settings(tmp_path),
+    )
+
+    assert not any(rule.startswith("security_config_tampering:") for rule in rules)
+
+
 def test_overlapping_shell_patterns_score_less_than_naive_sum(tmp_path):
     settings = _settings(tmp_path)
     score, rules = analyze("run_shell", {"command": "rm -rf /"}, settings)

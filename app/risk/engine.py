@@ -66,6 +66,7 @@ def assess_risk(
     # win; the LLM's explanation is preferred over intent_analyzer's generic
     # fallback text ("No user intent was provided...") whenever it's used.
     priority_explanation = behavior_signal.explanation or cross_agent_signal.explanation
+    priority_explanation = priority_explanation or _fixed_rule_explanation(all_rules)
 
     if score < threshold:
         return RiskAssessment(
@@ -107,3 +108,17 @@ def _lane_for_score_and_intent(score: int, alignment: str) -> str:
     if score >= 40 or alignment == "uncertain":
         return "yellow"
     return "green"
+
+
+def _fixed_rule_explanation(rules: list[str]) -> str:
+    config_rule = next(
+        (rule for rule in rules if rule.startswith("security_config_tampering:")), None
+    )
+    if config_rule:
+        path = config_rule.split(":", 1)[1]
+        return (
+            f"The agent is attempting to change the security configuration at {path}. "
+            "This could disable or weaken Agent Firewall protection, so the change "
+            "requires your explicit approval."
+        )
+    return ""

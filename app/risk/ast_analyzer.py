@@ -8,6 +8,28 @@ from app.config import Settings
 CODE_ARG_TOOLS = {"exec_python", "run_shell"}
 WRITE_TOOLS = {"write_file", "overwrite_file", "apply_patch"}
 
+SECURITY_CONFIG_PATHS = (
+    "/.codex/hooks.json",
+    "/.codex/config.toml",
+    "/.claude/settings.json",
+    "/protected_paths.json",
+    "/.env",
+)
+
+SHELL_MUTATION_MARKERS = (
+    "rm ",
+    "mv ",
+    "cp ",
+    "chmod ",
+    "chown ",
+    "truncate ",
+    "sed -i",
+    "perl -i",
+    " >",
+    "> ",
+    "tee ",
+)
+
 DANGEROUS_CALL_NAMES: dict[str, int] = {
     "remove": 75,
     "rmtree": 85,
@@ -106,6 +128,34 @@ def _score_shell_command(command: str) -> list[tuple[str, int]]:
     ]
 
 
+def _security_config_matches(text: str) -> list[str]:
+    normalized = text.replace("\\", "/").lower()
+    return [path for path in SECURITY_CONFIG_PATHS if path in normalized]
+
+
+def _looks_like_config_mutation(tool_name: str, text: str) -> bool:
+    if tool_name in WRITE_TOOLS:
+        return True
+    lowered = f" {text.lower()} "
+    if tool_name == "run_shell":
+        return any(marker in lowered for marker in SHELL_MUTATION_MARKERS)
+    if tool_name == "exec_python":
+        return any(
+            marker in lowered
+            for marker in (
+                "write(",
+                "write_text(",
+                "unlink(",
+                "remove(",
+                "rename(",
+                "replace(",
+                "chmod(",
+                "rmtree(",
+            )
+        )
+    return False
+
+
 def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[str]]:
     score = 0
     matched_rules: list[str] = []
@@ -151,10 +201,17 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
         if tool_name in WRITE_TOOLS and path_exists:
             add_rule(f"overwrite_existing_file:{path}", 20)
 
+        if tool_name in WRITE_TOOLS:
+            for protected_config in _security_config_matches(path):
+                add_rule(f"security_config_tampering:{protected_config}", 100)
+
     if tool_name == "apply_patch":
         patch = args.get("command") or ""
         if isinstance(patch, str) and "*** Delete File:" in patch:
             add_rule("apply_patch:delete_file", 75)
+        if isinstance(patch, str):
+            for protected_config in _security_config_matches(patch):
+                add_rule(f"security_config_tampering:{protected_config}", 100)
 
     if tool_name in CODE_ARG_TOOLS:
         code = args.get("code") or args.get("command") or ""
@@ -163,6 +220,10 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
 
         for rule, weight in _score_protected_paths_in_text(code, settings):
             add_rule(rule, weight)
+
+        if _looks_like_config_mutation(tool_name, code):
+            for protected_config in _security_config_matches(code):
+                add_rule(f"security_config_tampering:{protected_config}", 100)
 
         if tool_name == "exec_python":
             for rule, weight in _score_python_code(code):

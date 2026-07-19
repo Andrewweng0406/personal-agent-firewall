@@ -54,6 +54,22 @@ def test_high_risk_call_invokes_llm_and_uses_explanation(tmp_path):
     assert len(llm.calls) == 1
 
 
+def test_security_config_tampering_uses_fixed_plain_language_explanation(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=100, explanation="generic model explanation")
+
+    assessment = assess_risk(
+        "write_file",
+        {"path": "/home/user/.codex/hooks.json", "content": '{"hooks": {}}'},
+        settings,
+        llm,
+    )
+
+    assert "change the security configuration" in assessment.plain_explanation
+    assert "/.codex/hooks.json" in assessment.plain_explanation
+    assert "explicit approval" in assessment.plain_explanation
+
+
 def test_final_score_is_max_of_static_and_llm(tmp_path):
     settings = _settings(tmp_path)
     llm = FakeLlmClient(score=10, explanation="actually seems fine")

@@ -132,6 +132,48 @@ def test_reading_security_config_is_not_mislabeled_as_tampering(tmp_path):
     assert not any(rule.startswith("security_config_tampering:") for rule in rules)
 
 
+def test_deleting_configured_audit_database_has_dedicated_rule(tmp_path):
+    settings = _settings(tmp_path)
+    score, rules = analyze(
+        "run_shell",
+        {"command": f"rm -f {settings.audit_db_path}"},
+        settings,
+    )
+
+    assert score == 100
+    assert f"audit_log_deletion:{settings.audit_db_path}" in rules
+
+
+def test_deleting_audit_rows_with_sql_has_dedicated_rule(tmp_path):
+    score, rules = analyze(
+        "run_shell",
+        {"command": "sqlite3 audit_log.db 'DELETE FROM events'"},
+        _settings(tmp_path),
+    )
+
+    assert score == 100
+    assert "audit_log_deletion:delete from events" in rules
+
+
+def test_clearing_shell_history_has_dedicated_rule(tmp_path):
+    score, rules = analyze(
+        "run_shell", {"command": "history -c"}, _settings(tmp_path)
+    )
+
+    assert score == 100
+    assert "audit_log_deletion:shell history" in rules
+
+
+def test_querying_audit_database_is_not_mislabeled_as_deletion(tmp_path):
+    _score, rules = analyze(
+        "run_shell",
+        {"command": "sqlite3 audit_log.db 'SELECT * FROM events LIMIT 10'"},
+        _settings(tmp_path),
+    )
+
+    assert not any(rule.startswith("audit_log_deletion:") for rule in rules)
+
+
 def test_overlapping_shell_patterns_score_less_than_naive_sum(tmp_path):
     settings = _settings(tmp_path)
     score, rules = analyze("run_shell", {"command": "rm -rf /"}, settings)

@@ -121,4 +121,14 @@ def _fixed_rule_explanation(rules: list[str]) -> str:
             "This could disable or weaken Agent Firewall protection, so the change "
             "requires your explicit approval."
         )
+    audit_rule = next(
+        (rule for rule in rules if rule.startswith("audit_log_deletion:")), None
+    )
+    if audit_rule:
+        target = audit_rule.split(":", 1)[1]
+        return (
+            f"The agent is attempting to delete or erase audit history in {target}. "
+            "That would remove the record of what the agent did, so the action "
+            "requires your explicit approval."
+        )
     return ""

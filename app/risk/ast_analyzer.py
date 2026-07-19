@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 
 from app.config import Settings
 
@@ -156,6 +157,39 @@ def _looks_like_config_mutation(tool_name: str, text: str) -> bool:
     return False
 
 
+def _audit_log_deletion_targets(
+    tool_name: str, text: str, settings: Settings
+) -> list[str]:
+    normalized = text.replace("\\", "/").lower()
+    targets: list[str] = []
+    mutates_path = _looks_like_config_mutation(tool_name, text)
+    configured_db = str(settings.audit_db_path).replace("\\", "/").lower()
+    audit_markers = {
+        configured_db: str(settings.audit_db_path),
+        "audit_log.db": "audit_log.db",
+        "agent_firewall.log": "agent_firewall.log",
+        "/.bash_history": ".bash_history",
+        "/.zsh_history": ".zsh_history",
+    }
+    for marker, label in audit_markers.items():
+        if mutates_path and marker and marker in normalized and label not in targets:
+            targets.append(label)
+
+    sql_deletion = re.search(
+        r"\b(?:delete\s+from|drop\s+table)\s+(?:events|codex_events|backups)\b",
+        normalized,
+    )
+    if sql_deletion:
+        targets.append(sql_deletion.group(0))
+    if re.search(r"\bhistory\s+-c\b|\bclear-history\b", normalized):
+        targets.append("shell history")
+    if "/api/dashboard" in normalized and re.search(
+        r"(?:-x|--request)\s+delete\b", normalized
+    ):
+        targets.append("dashboard audit history")
+    return targets
+
+
 def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[str]]:
     score = 0
     matched_rules: list[str] = []
@@ -204,6 +238,8 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
         if tool_name in WRITE_TOOLS:
             for protected_config in _security_config_matches(path):
                 add_rule(f"security_config_tampering:{protected_config}", 100)
+            for target in _audit_log_deletion_targets(tool_name, path, settings):
+                add_rule(f"audit_log_deletion:{target}", 100)
 
     if tool_name == "apply_patch":
         patch = args.get("command") or ""
@@ -212,6 +248,8 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
         if isinstance(patch, str):
             for protected_config in _security_config_matches(patch):
                 add_rule(f"security_config_tampering:{protected_config}", 100)
+            for target in _audit_log_deletion_targets(tool_name, patch, settings):
+                add_rule(f"audit_log_deletion:{target}", 100)
 
     if tool_name in CODE_ARG_TOOLS:
         code = args.get("code") or args.get("command") or ""
@@ -224,6 +262,8 @@ def analyze(tool_name: str, args: dict, settings: Settings) -> tuple[int, list[s
         if _looks_like_config_mutation(tool_name, code):
             for protected_config in _security_config_matches(code):
                 add_rule(f"security_config_tampering:{protected_config}", 100)
+        for target in _audit_log_deletion_targets(tool_name, code, settings):
+            add_rule(f"audit_log_deletion:{target}", 100)
 
         if tool_name == "exec_python":
             for rule, weight in _score_python_code(code):

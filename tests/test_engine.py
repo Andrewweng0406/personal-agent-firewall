@@ -70,6 +70,22 @@ def test_security_config_tampering_uses_fixed_plain_language_explanation(tmp_pat
     assert "explicit approval" in assessment.plain_explanation
 
 
+def test_audit_log_deletion_uses_fixed_plain_language_explanation(tmp_path):
+    settings = _settings(tmp_path)
+    llm = FakeLlmClient(score=100, explanation="generic model explanation")
+
+    assessment = assess_risk(
+        "run_shell",
+        {"command": f"rm -f {settings.audit_db_path}"},
+        settings,
+        llm,
+    )
+
+    assert "delete or erase audit history" in assessment.plain_explanation
+    assert str(settings.audit_db_path) in assessment.plain_explanation
+    assert "record of what the agent did" in assessment.plain_explanation
+
+
 def test_final_score_is_max_of_static_and_llm(tmp_path):
     settings = _settings(tmp_path)
     llm = FakeLlmClient(score=10, explanation="actually seems fine")

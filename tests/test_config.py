@@ -129,3 +129,16 @@ def test_invalid_firewall_mode_falls_back_to_review(tmp_path: Path, monkeypatch)
     settings = load_settings()
 
     assert settings.firewall_mode == "review"
+
+
+def test_semantic_pii_is_opt_in(tmp_path: Path, monkeypatch):
+    data = {"critical_paths": [], "allowed_tools": [], "blocked_tools": []}
+    file_path = tmp_path / "protected_paths.json"
+    file_path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("PROTECTED_PATHS_FILE", str(file_path))
+    monkeypatch.delenv("SEMANTIC_PII_ENABLED", raising=False)
+
+    assert load_settings().semantic_pii_enabled is False
+
+    monkeypatch.setenv("SEMANTIC_PII_ENABLED", "yes")
+    assert load_settings().semantic_pii_enabled is True

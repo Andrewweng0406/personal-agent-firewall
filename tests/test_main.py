@@ -63,6 +63,7 @@ def test_health_reports_runtime_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("AUDIT_DB_PATH", str(tmp_path / "audit.db"))
     monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("FIREWALL_MODE", "observe")
+    monkeypatch.delenv("SEMANTIC_PII_ENABLED", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     import app.main as main_module
@@ -76,3 +77,4 @@ def test_health_reports_runtime_mode(tmp_path, monkeypatch):
     assert response.json()["status"] == "ok"
     assert response.json()["mode"] == "observe"
     assert response.json()["pending_reviews"] == 0
+    assert response.json()["semantic_pii"] == "disabled"

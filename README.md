@@ -27,6 +27,12 @@ out of source control, and set the same value for separately launched backend
 and agent processes. Authentication remains disabled when the variable is
 unset for backward-compatible local development.
 
+Regex and structured-field privacy redaction are always active. Optional
+embedding-based semantic PII detection is disabled by default so startup is
+fast, offline, and does not download a model unexpectedly. Set
+`SEMANTIC_PII_ENABLED=1` to initialize it in the background; `/api/health`
+reports `disabled`, `initializing`, `ready`, or `unavailable`.
+
 ## Run the server
 
     uvicorn app.main:app --reload

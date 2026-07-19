@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -10,12 +11,14 @@ from app.auth import install_api_auth, websocket_token_is_valid
 from app.codex.router import build_codex_router
 from app.config import load_settings
 from app.gateway.router import GatewayState, build_router
-from app.privacy.vector_store import SemanticPiiDetector
 from app.risk.llm_translator import build_llm_client
 from app.state.audit_log import AuditLog
 from app.state.backup_manager import BackupManager
 from app.state.containment import ContainmentStore
 from app.ws.manager import ConnectionManager
+
+if TYPE_CHECKING:
+    from app.privacy.vector_store import SemanticPiiDetector
 
 settings = load_settings()
 logger = logging.getLogger(__name__)
@@ -30,6 +33,7 @@ containment_store = ContainmentStore(settings.audit_db_path)
 # model (and download it on first use), so it must not block the HTTP server
 # from reaching its ready state.
 semantic_pii_detector: SemanticPiiDetector | None = None
+semantic_pii_status = "disabled" if not settings.semantic_pii_enabled else "initializing"
 gateway_state = GatewayState(
     settings,
     llm_client,
@@ -42,14 +46,19 @@ gateway_state = GatewayState(
 
 
 async def _initialize_semantic_pii_detector() -> None:
+    global semantic_pii_status
     try:
+        from app.privacy.vector_store import SemanticPiiDetector
+
         detector = await asyncio.to_thread(SemanticPiiDetector)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        semantic_pii_status = "unavailable"
         logger.warning("Semantic PII detector unavailable; regex protection remains active: %s", exc)
         return
     gateway_state.semantic_pii_detector = detector
+    semantic_pii_status = "ready"
     logger.info("Semantic PII detector initialized")
 
 
@@ -58,11 +67,15 @@ async def lifespan(app: FastAPI):
     settings.backup_dir.mkdir(parents=True, exist_ok=True)
     await audit_log.init_db()
     await containment_store.init_db()
-    semantic_task = asyncio.create_task(_initialize_semantic_pii_detector())
+    semantic_task = (
+        asyncio.create_task(_initialize_semantic_pii_detector())
+        if settings.semantic_pii_enabled
+        else None
+    )
     try:
         yield
     finally:
-        if not semantic_task.done():
+        if semantic_task is not None and not semantic_task.done():
             semantic_task.cancel()
 
 
@@ -78,7 +91,7 @@ async def health() -> dict:
         "status": "ok",
         "mode": settings.firewall_mode,
         "database": "ok",
-        "semantic_pii": "ready" if gateway_state.semantic_pii_detector else "initializing",
+        "semantic_pii": semantic_pii_status,
         "llm_provider": settings.llm_provider,
         "pending_reviews": len(gateway_state.pending),
     }

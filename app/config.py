@@ -33,6 +33,7 @@ class Settings:
     llm_provider: str = "anthropic"
     firewall_mode: str = "review"
     api_token: str | None = None
+    semantic_pii_enabled: bool = False
 
     def risk_level_for_path(self, path: str) -> str | None:
         for entry in self.critical_paths:
@@ -81,4 +82,6 @@ def load_settings() -> Settings:
         llm_provider=os.getenv("LLM_PROVIDER", "anthropic").strip().lower(),
         firewall_mode=firewall_mode,
         api_token=os.getenv("AGENT_FIREWALL_TOKEN") or None,
+        semantic_pii_enabled=os.getenv("SEMANTIC_PII_ENABLED", "0").strip().lower()
+        in {"1", "true", "yes", "on"},
     )

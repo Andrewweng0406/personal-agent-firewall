@@ -183,6 +183,12 @@ Override the defaults with `AGENT_FIREWALL_URL`,
 existing Codex event storage/API with a distinct `agent_id`; a future unified
 event schema can migrate both sources without changing the hook contract.
 
+Both hook adapters bound outbound events to 1 MiB and individual strings to
+64 KiB by default. Oversized values retain their beginning and end, while the
+event records its original byte size and SHA-256 digest. Override these limits
+with `AGENT_FIREWALL_MAX_EVENT_BYTES` and
+`AGENT_FIREWALL_MAX_STRING_BYTES`.
+
 ## Install hooks into another project
 
 Use the built-in installer when the target project does not contain this

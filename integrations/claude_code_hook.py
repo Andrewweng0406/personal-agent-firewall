@@ -7,6 +7,11 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+try:
+    from integrations.hook_payload import bound_payload
+except ModuleNotFoundError:  # Direct execution from the integrations directory.
+    from hook_payload import bound_payload
+
 FIREWALL_URL = os.getenv("AGENT_FIREWALL_URL", "http://127.0.0.1:8000").rstrip("/")
 HOOK_TIMEOUT_SECONDS = float(os.getenv("AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS", "170"))
 AGENT_ID = os.getenv("CLAUDE_CODE_FIREWALL_AGENT_ID", "claude-code-main")
@@ -16,6 +21,7 @@ Sender = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 
 def _post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    payload = bound_payload(payload)
     request = Request(
         f"{FIREWALL_URL}{path}",
         data=json.dumps(payload).encode("utf-8"),

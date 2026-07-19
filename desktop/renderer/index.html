@@ -15,8 +15,8 @@
           <div><strong>FIREWORKS</strong><small>AGENT FIREWALL</small></div>
         </div>
         <nav aria-label="Primary">
-          <button class="nav-item active"><span class="nav-icon">&#9673;</span> Overview</button>
-          <button class="nav-item" data-scroll="activity"><span class="nav-icon">&#8801;</span> Activity</button>
+          <button class="nav-item active" data-view="overview" aria-current="page"><span class="nav-icon">&#9673;</span> Overview</button>
+          <button class="nav-item" data-view="activity"><span class="nav-icon">&#8801;</span> Activity</button>
         </nav>
         <div class="sidebar-spacer"></div>
         <div class="protection-card">
@@ -30,7 +30,7 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">SECURITY OPERATIONS</p>
-            <h1>Firewall overview</h1>
+            <h1 id="page-title">Firewall overview</h1>
           </div>
           <div class="header-actions">
             <div class="connection-pill"><i id="connection-dot"></i><span id="connection-label">Connecting</span></div>
@@ -38,6 +38,7 @@
           </div>
         </header>
 
+        <section id="overview-view" class="view" data-view-panel="overview">
         <section class="filters" aria-label="Dashboard filters">
           <label>Agent<select id="agent-filter"><option value="">All agents</option></select></label>
           <label>Session<input id="session-filter" type="search" placeholder="All sessions"></label>
@@ -91,8 +92,9 @@
             <div id="pending-list" class="pending-list"><div class="empty-state">No requests need your attention.</div></div>
           </article>
         </section>
+        </section>
 
-        <section class="panel table-panel" id="activity">
+        <section class="panel table-panel view" id="activity-view" data-view-panel="activity" hidden>
           <div class="panel-heading"><div><p class="eyebrow">UNIFIED AUDIT STREAM</p><h2>Recent activity</h2></div><span>Chat and tool activity</span></div>
           <div class="table-scroll">
             <table>

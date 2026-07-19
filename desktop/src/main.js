@@ -291,10 +291,23 @@ app.whenReady().then(async () => {
         hasTrafficChart: Boolean(document.querySelector('#traffic-donut')),
         hasPendingReview: Boolean(document.querySelector('#pending-list'))
       })`);
+      result.activityNavigation = await mainWindow.webContents.executeJavaScript(`(() => {
+        document.querySelector('[data-view="activity"]')?.click();
+        return {
+          title: document.querySelector('#page-title')?.textContent,
+          activityVisible: !document.querySelector('#activity-view')?.hidden,
+          overviewHidden: Boolean(document.querySelector('#overview-view')?.hidden),
+          activeNav: document.querySelector('.nav-item.active')?.dataset.view
+        };
+      })()`);
       result.reviewActions = reviewActions;
       const valid = result.title === 'Personal Agent Firewall' && result.brand === 'FIREWORKS' &&
         result.hasTrafficChart &&
         result.hasPendingReview && result.connection === 'Live protection' &&
+        result.activityNavigation?.title === 'Activity' &&
+        result.activityNavigation?.activityVisible &&
+        result.activityNavigation?.overviewHidden &&
+        result.activityNavigation?.activeNav === 'activity' &&
         reviewActions?.allow === 'Approve once' &&
         reviewActions?.deny === 'Reject request' && reviewActions?.tool === 'write_file';
       console.log(`DESKTOP_SMOKE ${JSON.stringify(result)}`);

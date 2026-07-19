@@ -34,6 +34,22 @@ function setConnection(status, label) {
   setText('#sidebar-status', label);
 }
 
+function showView(viewName) {
+  const target = document.querySelector(`[data-view-panel="${viewName}"]`);
+  if (!target) return;
+  document.querySelectorAll('[data-view-panel]').forEach((panel) => {
+    panel.hidden = panel !== target;
+  });
+  document.querySelectorAll('.nav-item[data-view]').forEach((button) => {
+    const active = button.dataset.view === viewName;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
+  setText('#page-title', viewName === 'activity' ? 'Activity' : 'Firewall overview');
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
 function renderStats(stats) {
   state.stats = stats;
   const total = stats.total_activity || 0;
@@ -296,8 +312,8 @@ function bindEvents() {
   $('#session-filter').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') $('#apply-filters').click();
   });
-  document.querySelectorAll('[data-scroll]').forEach((button) => {
-    button.addEventListener('click', () => document.getElementById(button.dataset.scroll).scrollIntoView({ behavior: 'smooth' }));
+  document.querySelectorAll('.nav-item[data-view]').forEach((button) => {
+    button.addEventListener('click', () => showView(button.dataset.view));
   });
   api.onDecisionResolved(({ request_id }) => {
     state.pending.delete(request_id);

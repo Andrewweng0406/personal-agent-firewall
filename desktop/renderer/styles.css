@@ -41,6 +41,7 @@ nav { display: grid; gap: 7px; }
 .version span { float: right; }
 
 main { grid-column: 2; min-width: 0; padding: 32px 36px 60px; max-width: 1680px; width: 100%; }
+.view[hidden] { display: none; }
 .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
 .eyebrow { margin: 0 0 6px; color: var(--green); font-size: 9px; font-weight: 800; letter-spacing: .17em; }
 h1, h2 { margin: 0; font-weight: 620; }
@@ -109,7 +110,7 @@ h2 { font-size: 16px; }
 .deny-button:hover { background: #341b20; }.allow-button:hover { background: #77efb2; }
 .deny-button:disabled, .allow-button:disabled { opacity: .5; cursor: wait; }
 
-.table-panel { margin-bottom: 13px; padding-bottom: 8px; scroll-margin-top: 20px; }
+.table-panel { margin-bottom: 13px; padding-bottom: 8px; }
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; min-width: 760px; }
 th { color: #67746d; font-size: 8px; letter-spacing: .12em; text-align: left; font-weight: 800; padding: 0 12px 10px; }

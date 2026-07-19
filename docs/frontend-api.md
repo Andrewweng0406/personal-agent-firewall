@@ -404,6 +404,18 @@ feed. Both endpoints accept `agent_id`, `session_id`, and `limit` filters.
 
 `decision_counts` keys are the raw `decision` values written to the audit log, not just `"allowed"`/`"denied"` — they also include `allowed_execution_failed`, `denied_quarantined`, and `denied_auto_contained`. Do not hardcode a two-key mapping; sum every key that starts with `"denied"` if you want a single "denied" total, and every key that starts with `"allowed"` for an "allowed" total (this is exactly what `agents[].denied_events` already does server-side for the per-agent breakdown).
 
+### Reset Dashboard Usage Data
+
+```http
+POST /api/dashboard/reset
+```
+
+This clears tool events, Codex chat events, containment records, and backup
+database records. Physical files under `backups/` are retained. The endpoint
+returns the number of rows cleared from each table and broadcasts a
+`usage_reset` WebSocket event. It returns HTTP `409` if a request is currently
+waiting for reviewer approval.
+
 ### Codex Lifecycle Events
 
 Repo-local hooks send main Codex prompts, responses, and tool results to:

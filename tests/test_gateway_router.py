@@ -94,6 +94,54 @@ async def test_low_risk_call_is_allowed_immediately(tmp_path):
     assert state.pending == {}
 
 
+async def test_dashboard_reset_clears_usage_and_containments(tmp_path):
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+    await state.audit_log.log_codex_event(
+        event_id="chat-1",
+        event_type="user_prompt",
+        agent_id="agent-1",
+        session_id="s-1",
+        turn_id="turn-1",
+        cwd=str(tmp_path),
+        model="test",
+        permission_mode="default",
+        content_redacted="hello",
+        tool_name=None,
+        payload={},
+        risk_score=0,
+        risk_level="LOW",
+        matched_rules=[],
+        action="allow",
+        explanation="safe",
+        created_at="2026-07-18T00:00:00+00:00",
+    )
+    await state.containment_store.quarantine("agent", "agent-1", None, "test")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/api/tool_call",
+            json={
+                "tool_name": "search_web",
+                "args": {"query": "hello"},
+                "agent_id": "agent-1",
+                "session_id": "s-1",
+            },
+        )
+        response = await client.post("/api/dashboard/reset")
+        stats = await client.get("/api/dashboard/stats")
+
+    assert response.status_code == 200
+    assert response.json()["cleared"]["events"] == 1
+    assert response.json()["cleared"]["codex_events"] == 1
+    assert response.json()["cleared"]["containments"] == 1
+    assert stats.json()["total_activity"] == 0
+    assert stats.json()["active_containments"] == 0
+    assert state.ws_manager.broadcasts[-1]["type"] == "usage_reset"
+
+
 async def test_intent_aligned_low_risk_call_returns_green_lane(tmp_path):
     target = tmp_path / "project" / "src" / "components" / "LoginButton.tsx"
     target.parent.mkdir(parents=True)

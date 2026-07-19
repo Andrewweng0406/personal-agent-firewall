@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, net } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, net } = require('electron');
 const { spawn } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const path = require('node:path');
@@ -8,6 +8,7 @@ const desktopRoot = path.resolve(__dirname, '..');
 const backendUrl = (process.env.AGENT_FIREWALL_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 const wsUrl = backendUrl.replace(/^http/, 'ws') + '/ws/alerts';
 const smokeMode = process.argv.includes('--smoke-test');
+const resetDataOnLaunch = !smokeMode && process.env.FIREWORKS_RESET_ON_LAUNCH !== '0';
 
 let mainWindow = null;
 let backendProcess = null;
@@ -15,6 +16,7 @@ let backendReady = false;
 let backendError = null;
 let backendStartPromise = null;
 let backendLog = [];
+let launchResetComplete = !resetDataOnLaunch;
 const reviewWindows = new Map();
 
 function createWindow() {
@@ -25,6 +27,7 @@ function createWindow() {
     minHeight: 720,
     backgroundColor: '#08100d',
     title: 'Personal Agent Firewall',
+    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -231,6 +234,15 @@ function startBackend() {
   backendError = null;
   backendStartPromise = (async () => {
     backendReady = await ensureBackend();
+    if (backendReady && !launchResetComplete) {
+      try {
+        await apiFetch('/api/dashboard/reset', { method: 'POST' });
+        launchResetComplete = true;
+      } catch (error) {
+        backendReady = false;
+        backendError = `Backend started, but usage data could not be reset: ${error.message}`;
+      }
+    }
     if (backendReady) {
       mainWindow?.webContents.send('firewall:backend-ready');
     } else {
@@ -244,6 +256,7 @@ function startBackend() {
 }
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   registerIpc();
   createWindow();
   await startBackend();

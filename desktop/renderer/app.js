@@ -230,7 +230,7 @@ function handleSocketEvent(event) {
     api.alertResolved(event);
     renderPending();
     setTimeout(refreshData, 250);
-  } else if (['containment_changed', 'backup_restored', 'codex_event'].includes(event.type)) {
+  } else if (['containment_changed', 'backup_restored', 'codex_event', 'usage_reset'].includes(event.type)) {
     refreshData();
   }
 }

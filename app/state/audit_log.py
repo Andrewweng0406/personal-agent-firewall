@@ -323,3 +323,15 @@ class AuditLog:
             cursor = await db.execute(query, values)
             row = await cursor.fetchone()
             return row[0] if row else None
+
+    async def reset_usage_data(self) -> dict[str, int]:
+        """Clear dashboard/audit records without deleting physical backup files."""
+        tables = ("events", "codex_events", "backups")
+        cleared: dict[str, int] = {}
+        async with aiosqlite.connect(self._db_path) as db:
+            for table in tables:
+                cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")
+                cleared[table] = int((await cursor.fetchone())[0])
+                await db.execute(f"DELETE FROM {table}")
+            await db.commit()
+        return cleared

@@ -567,6 +567,18 @@ def build_router(state: GatewayState) -> APIRouter:
         stats["active_containments"] = len(active_containments)
         return stats
 
+    @router.post("/api/dashboard/reset")
+    async def reset_dashboard_data() -> dict:
+        if state.pending:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot reset usage data while requests are awaiting review",
+            )
+        cleared = await state.audit_log.reset_usage_data()
+        cleared["containments"] = await state.containment_store.reset()
+        await state.ws_manager.broadcast({"type": "usage_reset", "cleared": cleared})
+        return {"reset": True, "cleared": cleared}
+
     return router
 
 

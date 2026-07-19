@@ -115,3 +115,11 @@ class ContainmentStore:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(query, values)
             return [dict(row) for row in await cursor.fetchall()]
+
+    async def reset(self) -> int:
+        async with aiosqlite.connect(self._db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM containments")
+            count = int((await cursor.fetchone())[0])
+            await db.execute("DELETE FROM containments")
+            await db.commit()
+            return count

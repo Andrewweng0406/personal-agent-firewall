@@ -38,6 +38,11 @@ stops that child process when the desktop app exits. To use another backend,
 set `AGENT_FIREWALL_URL` before launching Electron. To use another Python
 executable, set `FIREWALL_PYTHON`.
 
+For repeatable demos, the desktop app clears recorded chat/tool activity,
+containments, and backup database records on each launch. Physical files under
+`backups/` are retained. Set `FIREWORKS_RESET_ON_LAUNCH=0` before starting the
+desktop app to preserve usage history between launches.
+
 ## Run the tests
 
     pytest -v

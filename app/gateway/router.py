@@ -199,7 +199,7 @@ def build_router(state: GatewayState) -> APIRouter:
             request.agent_id, request.session_id, limit=20
         )
         behavior_signal = analyze_behavior_chain(
-            request.tool_name, sanitized_args, history
+            request.tool_name, sanitized_args, history, settings.trusted_domains
         )
         system_wide_recent = await state.audit_log.list_events(limit=50)
         cross_agent_signal = detect_cross_agent_pattern(

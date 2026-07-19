@@ -34,6 +34,7 @@ class Settings:
     firewall_mode: str = "review"
     api_token: str | None = None
     semantic_pii_enabled: bool = False
+    trusted_domains: list[str] = field(default_factory=list)
 
     def risk_level_for_path(self, path: str) -> str | None:
         for entry in self.critical_paths:
@@ -47,7 +48,7 @@ class Settings:
 
 def load_protected_paths(
     file_path: Path,
-) -> tuple[list[ProtectedPathEntry], list[str], list[str]]:
+) -> tuple[list[ProtectedPathEntry], list[str], list[str], list[str]]:
     with open(file_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     critical_paths = [
@@ -60,12 +61,15 @@ def load_protected_paths(
     ]
     allowed_tools = data.get("allowed_tools", [])
     blocked_tools = data.get("blocked_tools", [])
-    return critical_paths, allowed_tools, blocked_tools
+    trusted_domains = data.get("trusted_domains", [])
+    return critical_paths, allowed_tools, blocked_tools, trusted_domains
 
 
 def load_settings() -> Settings:
     protected_paths_file = BASE_DIR / os.getenv("PROTECTED_PATHS_FILE", "protected_paths.json")
-    critical_paths, allowed_tools, blocked_tools = load_protected_paths(protected_paths_file)
+    critical_paths, allowed_tools, blocked_tools, trusted_domains = load_protected_paths(
+        protected_paths_file
+    )
     firewall_mode = os.getenv("FIREWALL_MODE", "review").strip().lower()
     if firewall_mode not in {"observe", "review", "enforce"}:
         firewall_mode = "review"
@@ -84,4 +88,5 @@ def load_settings() -> Settings:
         api_token=os.getenv("AGENT_FIREWALL_TOKEN") or None,
         semantic_pii_enabled=os.getenv("SEMANTIC_PII_ENABLED", "0").strip().lower()
         in {"1", "true", "yes", "on"},
+        trusted_domains=trusted_domains,
     )

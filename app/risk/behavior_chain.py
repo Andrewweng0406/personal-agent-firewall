@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 
 @dataclass
@@ -54,6 +56,7 @@ def analyze_behavior_chain(
     tool_name: str,
     args: dict[str, Any],
     history: list[dict],
+    trusted_domains: list[str] | None = None,
 ) -> BehaviorSignal:
     allowed_history = [row for row in history if row.get("decision") == "allowed"]
     sensitive_read = next(
@@ -61,21 +64,42 @@ def analyze_behavior_chain(
         None,
     )
 
-    if sensitive_read and _is_external_upload(tool_name, args):
+    upload_domain = _external_upload_domain(tool_name, args)
+    unknown_domain = upload_domain and not _is_trusted_domain(
+        upload_domain, trusted_domains or []
+    )
+
+    if sensitive_read and upload_domain:
         source = _event_target(sensitive_read) or "a sensitive source"
+        rules = [
+            "behavior_chain:sensitive_read_then_external_upload",
+            f"behavior_chain:source:{source}",
+        ]
+        if unknown_domain:
+            rules.append(f"unknown_domain_upload:{upload_domain}")
         return BehaviorSignal(
             score_delta=100,
-            matched_rules=[
-                "behavior_chain:sensitive_read_then_external_upload",
-                f"behavior_chain:source:{source}",
-            ],
+            matched_rules=rules,
             explanation=(
-                "The agent previously read sensitive data and is now attempting "
-                "an external upload in the same session. The action was blocked "
+                f"The agent read sensitive data from {source} and is attempting to "
+                f"send data to {upload_domain}"
+                + (", an untrusted domain" if unknown_domain else "")
+                + ". This was not part of your request, so the action was blocked "
                 "and the session was quarantined."
             ),
             chain_detected=True,
             auto_contain=True,
+        )
+
+    if unknown_domain:
+        return BehaviorSignal(
+            score_delta=70,
+            matched_rules=[f"unknown_domain_upload:{upload_domain}"],
+            explanation=(
+                f"The agent is attempting to upload data to {upload_domain}, "
+                "which is not on your trusted-domain list. Review the destination "
+                "before allowing this action."
+            ),
         )
 
     return BehaviorSignal()
@@ -93,11 +117,31 @@ def _is_sensitive_read(row: dict) -> bool:
 
 
 def _is_external_upload(tool_name: str, args: dict[str, Any]) -> bool:
+    return _external_upload_domain(tool_name, args) is not None
+
+
+def _external_upload_domain(tool_name: str, args: dict[str, Any]) -> str | None:
     if tool_name not in {"run_shell", "exec_python"}:
-        return False
+        return None
     text = " ".join(str(value) for value in args.values()).lower()
-    return any(marker in text for marker in NETWORK_MARKERS) and any(
+    if not any(marker in text for marker in NETWORK_MARKERS) or not any(
         marker in text for marker in UPLOAD_MARKERS
+    ):
+        return None
+    for candidate in re.findall(r"https?://[^\s'\"<>]+", text):
+        hostname = urlsplit(candidate.rstrip(").,;" )).hostname
+        if hostname:
+            return hostname.lower().rstrip(".")
+    return None
+
+
+def _is_trusted_domain(domain: str, trusted_domains: list[str]) -> bool:
+    normalized = domain.lower().rstrip(".")
+    return any(
+        normalized == trusted.lower().rstrip(".")
+        or normalized.endswith("." + trusted.lower().rstrip("."))
+        for trusted in trusted_domains
+        if trusted.strip()
     )
 
 

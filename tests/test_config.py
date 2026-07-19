@@ -16,17 +16,21 @@ def test_load_protected_paths_from_file(tmp_path: Path):
         ],
         "allowed_tools": ["read_file"],
         "blocked_tools": ["rm"],
+        "trusted_domains": ["github.com"],
     }
     file_path = tmp_path / "protected_paths.json"
     file_path.write_text(json.dumps(data), encoding="utf-8")
 
-    critical_paths, allowed_tools, blocked_tools = load_protected_paths(file_path)
+    critical_paths, allowed_tools, blocked_tools, trusted_domains = load_protected_paths(
+        file_path
+    )
 
     assert critical_paths == [
         ProtectedPathEntry(path="/src/index.html", risk_level="CRITICAL", auto_backup=True)
     ]
     assert allowed_tools == ["read_file"]
     assert blocked_tools == ["rm"]
+    assert trusted_domains == ["github.com"]
 
 
 def test_settings_risk_level_for_path_matches_suffix():

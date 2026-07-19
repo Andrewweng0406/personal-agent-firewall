@@ -1,6 +1,7 @@
 __pycache__/
 .venv/
 *.pyc
+*.log
 .env
 backups/
 audit_log.db

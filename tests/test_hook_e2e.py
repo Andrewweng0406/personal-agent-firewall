@@ -9,11 +9,12 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import uvicorn
 from fastapi import FastAPI
 
+from app.auth import install_api_auth
 from app.codex.router import build_codex_router
 from app.config import Settings
 from app.gateway.router import GatewayState, build_router
@@ -35,7 +36,7 @@ class _WsManager:
         return None
 
 
-async def _build_app(tmp_path: Path) -> FastAPI:
+async def _build_app(tmp_path: Path, api_token: str | None = None) -> FastAPI:
     database = tmp_path / "hook-e2e.db"
     audit_log = AuditLog(database)
     containment = ContainmentStore(database)
@@ -61,6 +62,7 @@ async def _build_app(tmp_path: Path) -> FastAPI:
         containment,
     )
     app = FastAPI()
+    install_api_auth(app, api_token)
     app.include_router(build_router(state))
     app.include_router(build_codex_router(state))
     return app
@@ -88,13 +90,19 @@ def _running_server(app: FastAPI):
         thread.join(timeout=5)
 
 
-def _run_hook(script: str, base_url: str, payload: dict) -> dict:
+def _run_hook(
+    script: str, base_url: str, payload: dict, api_token: str | None = None
+) -> dict:
     env = {
         **os.environ,
         "AGENT_FIREWALL_URL": base_url,
         "AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS": "5",
         "FIREWALL_MODE": "observe",
     }
+    if api_token:
+        env["AGENT_FIREWALL_TOKEN"] = api_token
+    else:
+        env.pop("AGENT_FIREWALL_TOKEN", None)
     result = subprocess.run(
         [sys.executable, str(ROOT / "integrations" / script)],
         input=json.dumps(payload),
@@ -115,7 +123,8 @@ def _get_json(url: str) -> dict:
 
 
 async def test_codex_hook_process_posts_prompt_to_firewall(tmp_path):
-    app = await _build_app(tmp_path)
+    api_token = "codex-e2e-token"
+    app = await _build_app(tmp_path, api_token=api_token)
     with _running_server(app) as base_url:
         output = _run_hook(
             "codex_hook.py",
@@ -127,10 +136,14 @@ async def test_codex_hook_process_posts_prompt_to_firewall(tmp_path):
                 "cwd": "/project",
                 "prompt": "Refactor the dashboard",
             },
+            api_token=api_token,
         )
-        events = _get_json(
-            f"{base_url}/api/codex/events?session_id=codex-e2e-session"
-        )
+        events_url = f"{base_url}/api/codex/events?session_id=codex-e2e-session"
+        with urlopen(
+            Request(events_url, headers={"Authorization": f"Bearer {api_token}"}),
+            timeout=5,
+        ) as response:
+            events = json.loads(response.read().decode("utf-8"))
 
     assert output == {}
     assert events["count"] == 1

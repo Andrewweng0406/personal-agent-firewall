@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from app.auth import install_api_auth, websocket_token_is_valid
 from app.codex.router import build_codex_router
 from app.config import load_settings
 from app.gateway.router import GatewayState, build_router
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Personal Agent Firewall", lifespan=lifespan)
+install_api_auth(app, settings.api_token)
 app.include_router(build_router(gateway_state))
 app.include_router(build_codex_router(gateway_state))
 
@@ -84,6 +86,10 @@ async def health() -> dict:
 
 @app.websocket("/ws/alerts")
 async def ws_alerts(websocket: WebSocket) -> None:
+    supplied_token = websocket.query_params.get("token")
+    if not websocket_token_is_valid(supplied_token, settings.api_token):
+        await websocket.close(code=1008, reason="Missing or invalid API token")
+        return
     await ws_manager.connect(websocket)
     try:
         while True:

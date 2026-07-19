@@ -18,6 +18,7 @@ FIREWALL_URL = os.getenv("AGENT_FIREWALL_URL", "http://127.0.0.1:8000").rstrip("
 HOOK_TIMEOUT_SECONDS = float(os.getenv("AGENT_FIREWALL_HOOK_TIMEOUT_SECONDS", "170"))
 AGENT_ID = os.getenv("CODEX_FIREWALL_AGENT_ID", "codex-main")
 FIREWALL_MODE = os.getenv("FIREWALL_MODE", "review").strip().lower()
+API_TOKEN = os.getenv("AGENT_FIREWALL_TOKEN")
 
 _PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
 Sender = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -25,10 +26,13 @@ Sender = Callable[[str, dict[str, Any]], dict[str, Any]]
 
 def _post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     payload = bound_payload(payload)
+    headers = {"Content-Type": "application/json"}
+    if API_TOKEN:
+        headers["Authorization"] = f"Bearer {API_TOKEN}"
     request = Request(
         f"{FIREWALL_URL}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:

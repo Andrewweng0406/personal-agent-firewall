@@ -32,6 +32,7 @@ class Settings:
     openai_api_key: str | None = None
     llm_provider: str = "anthropic"
     firewall_mode: str = "review"
+    api_token: str | None = None
 
     def risk_level_for_path(self, path: str) -> str | None:
         for entry in self.critical_paths:
@@ -79,4 +80,5 @@ def load_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         llm_provider=os.getenv("LLM_PROVIDER", "anthropic").strip().lower(),
         firewall_mode=firewall_mode,
+        api_token=os.getenv("AGENT_FIREWALL_TOKEN") or None,
     )

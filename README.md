@@ -20,6 +20,13 @@ and scores every action without blocking it, and fails open if the backend is
 unavailable. `enforce` automatically denies calls at or above the effective
 risk threshold. The default is `review` for backward compatibility.
 
+Set `AGENT_FIREWALL_TOKEN` to protect every API endpoint except the health
+check. The desktop app and both hook adapters read the same environment
+variable and attach it automatically. Generate a long random value, keep it
+out of source control, and set the same value for separately launched backend
+and agent processes. Authentication remains disabled when the variable is
+unset for backward-compatible local development.
+
 ## Run the server
 
     uvicorn app.main:app --reload

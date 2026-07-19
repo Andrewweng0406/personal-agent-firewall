@@ -6,7 +6,9 @@ const path = require('node:path');
 const projectRoot = path.resolve(__dirname, '..', '..');
 const desktopRoot = path.resolve(__dirname, '..');
 const backendUrl = (process.env.AGENT_FIREWALL_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
-const wsUrl = backendUrl.replace(/^http/, 'ws') + '/ws/alerts';
+const apiToken = process.env.AGENT_FIREWALL_TOKEN || '';
+const wsToken = apiToken ? `?token=${encodeURIComponent(apiToken)}` : '';
+const wsUrl = backendUrl.replace(/^http/, 'ws') + '/ws/alerts' + wsToken;
 const smokeMode = process.argv.includes('--smoke-test');
 const resetDataOnLaunch = !smokeMode && process.env.FIREWALL_RESET_ON_LAUNCH === '1';
 
@@ -83,9 +85,12 @@ async function apiFetch(route, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
+    const headers = {};
+    if (options.body) headers['Content-Type'] = 'application/json';
+    if (apiToken) headers.Authorization = `Bearer ${apiToken}`;
     const response = await net.fetch(`${backendUrl}${route}`, {
       method: options.method || 'GET',
-      headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+      headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal
     });
@@ -164,7 +169,7 @@ async function backendIsReady() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 750);
   try {
-    const response = await net.fetch(`${backendUrl}/api/dashboard/stats`, {
+    const response = await net.fetch(`${backendUrl}/api/health`, {
       signal: controller.signal
     });
     return response.ok;

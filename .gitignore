@@ -9,3 +9,4 @@ audit_log.db
 .test-tmp*/
 *.egg-info/
 *.pdf
+desktop/node_modules/

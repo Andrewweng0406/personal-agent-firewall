@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "commandWindows": "powershell -NoProfile -Command \"python (Join-Path (git rev-parse --show-toplevel) 'integrations\\codex_hook.py')\"",
             "timeout": 180,
             "statusMessage": "Checking prompt with Agent Firewall"
           }
@@ -21,7 +21,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "commandWindows": "powershell -NoProfile -Command \"python (Join-Path (git rev-parse --show-toplevel) 'integrations\\codex_hook.py')\"",
             "timeout": 180,
             "statusMessage": "Checking tool call with Agent Firewall"
           }
@@ -35,7 +35,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "commandWindows": "powershell -NoProfile -Command \"python (Join-Path (git rev-parse --show-toplevel) 'integrations\\codex_hook.py')\"",
             "timeout": 180,
             "statusMessage": "Recording tool result with Agent Firewall"
           }
@@ -48,7 +48,7 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/integrations/codex_hook.py\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; python (Join-Path $root 'integrations\\codex_hook.py')\"",
+            "commandWindows": "powershell -NoProfile -Command \"python (Join-Path (git rev-parse --show-toplevel) 'integrations\\codex_hook.py')\"",
             "timeout": 180,
             "statusMessage": "Checking response with Agent Firewall"
           }

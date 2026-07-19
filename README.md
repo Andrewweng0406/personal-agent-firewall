@@ -18,6 +18,26 @@ required for the provider you pick.
 
     uvicorn app.main:app --reload
 
+## Run the desktop dashboard
+
+The Electron console shows combined chat and tool activity, safety posture,
+risk severity, interventions, a unified recent-activity feed, and live review
+requests. Red-lane requests open an always-on-top approval popup with **Approve
+once** and **Reject request** actions.
+
+Install the desktop dependency once, then start the app from the repository
+root:
+
+    cd desktop
+    npm install
+    npm start
+
+The desktop app connects to `http://127.0.0.1:8000`. If the backend is not
+already running, it starts it with the repository's `.venv` automatically and
+stops that child process when the desktop app exits. To use another backend,
+set `AGENT_FIREWALL_URL` before launching Electron. To use another Python
+executable, set `FIREWALL_PYTHON`.
+
 ## Run the tests
 
     pytest -v

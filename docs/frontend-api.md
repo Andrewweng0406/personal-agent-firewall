@@ -390,6 +390,18 @@ Recommended dashboard mapping:
 | Quarantine badge | `active_containments` |
 | Recent activity feed | `GET /api/events` |
 
+The dashboard response also includes conversation activity from Codex hooks:
+
+- `chat.total_events` counts user prompts and assistant responses.
+- `chat.event_type_counts`, `chat.action_counts`, and
+  `chat.risk_level_counts` summarize those messages.
+- `total_activity` combines chat messages with firewall tool requests.
+- `posture_counts` and `combined_risk_level_counts` combine both streams for
+  overview visualizations without double-counting `post_tool_use` telemetry.
+
+Use `GET /api/codex/events` alongside `GET /api/events` for a unified activity
+feed. Both endpoints accept `agent_id`, `session_id`, and `limit` filters.
+
 `decision_counts` keys are the raw `decision` values written to the audit log, not just `"allowed"`/`"denied"` — they also include `allowed_execution_failed`, `denied_quarantined`, and `denied_auto_contained`. Do not hardcode a two-key mapping; sum every key that starts with `"denied"` if you want a single "denied" total, and every key that starts with `"allowed"` for an "allowed" total (this is exactly what `agents[].denied_events` already does server-side for the per-agent breakdown).
 
 ### Codex Lifecycle Events

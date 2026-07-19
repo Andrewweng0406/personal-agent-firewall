@@ -90,11 +90,40 @@ async def test_benign_prompt_is_allowed_and_persisted(tmp_path):
         listed = await client.get(
             "/api/codex/events", params={"session_id": "codex-session"}
         )
+        dashboard = await client.get("/api/dashboard/stats")
 
     assert response.json()["action"] == "allow"
     assert listed.json()["count"] == 1
     assert listed.json()["events"][0]["content_redacted"] == "Update the login button color"
+    assert dashboard.json()["chat"]["total_events"] == 1
+    assert dashboard.json()["chat"]["event_type_counts"]["user_prompt"] == 1
+    assert dashboard.json()["total_activity"] == 1
+    assert dashboard.json()["posture_counts"] == {"green": 1, "yellow": 0, "red": 0}
     assert any(message["type"] == "codex_event" for message in state.ws_manager.broadcasts)
+
+
+async def test_codex_events_can_be_filtered_by_agent(tmp_path):
+    state = await _build_state(tmp_path)
+    app = _make_app(state)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/api/codex/event",
+            json=_event("user_prompt", agent_id="agent-a", content="Update the button"),
+        )
+        await client.post(
+            "/api/codex/event",
+            json=_event("assistant_response", agent_id="agent-b", content="Done"),
+        )
+        listed = await client.get("/api/codex/events", params={"agent_id": "agent-b"})
+        dashboard = await client.get("/api/dashboard/stats", params={"agent_id": "agent-b"})
+
+    assert listed.json()["count"] == 1
+    assert listed.json()["events"][0]["agent_id"] == "agent-b"
+    assert dashboard.json()["chat"]["total_events"] == 1
+    assert dashboard.json()["chat"]["event_type_counts"]["assistant_response"] == 1
 
 
 async def test_high_risk_prompt_waits_for_reviewer_and_denies(tmp_path):

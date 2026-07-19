@@ -278,6 +278,7 @@ class AuditLog:
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int | None = None,
+        agent_id: str | None = None,
     ) -> list[dict]:
         clauses: list[str] = []
         values: list[str | int] = []
@@ -287,6 +288,9 @@ class AuditLog:
         if turn_id:
             clauses.append("turn_id = ?")
             values.append(turn_id)
+        if agent_id:
+            clauses.append("agent_id = ?")
+            values.append(agent_id)
 
         query = "SELECT * FROM codex_events"
         if clauses:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -15,6 +17,7 @@ from app.state.containment import ContainmentStore
 from app.ws.manager import ConnectionManager
 
 settings = load_settings()
+logger = logging.getLogger(__name__)
 audit_log = AuditLog(settings.audit_db_path)
 backup_manager = BackupManager(settings.backup_dir, audit_log)
 llm_client = build_llm_client(
@@ -22,14 +25,10 @@ llm_client = build_llm_client(
 )
 ws_manager = ConnectionManager()
 containment_store = ContainmentStore(settings.audit_db_path)
-try:
-    # Optional: local vector-similarity PII detection on top of regex. Never
-    # let a network hiccup on the one-time embedding-model download (or any
-    # other Chroma init failure) prevent the whole app from starting -- the
-    # firewall's core guarantees don't depend on this enhancement.
-    semantic_pii_detector: SemanticPiiDetector | None = SemanticPiiDetector()
-except Exception:
-    semantic_pii_detector = None
+# The semantic detector is an optional enhancement. It may initialize an ONNX
+# model (and download it on first use), so it must not block the HTTP server
+# from reaching its ready state.
+semantic_pii_detector: SemanticPiiDetector | None = None
 gateway_state = GatewayState(
     settings,
     llm_client,
@@ -41,12 +40,29 @@ gateway_state = GatewayState(
 )
 
 
+async def _initialize_semantic_pii_detector() -> None:
+    try:
+        detector = await asyncio.to_thread(SemanticPiiDetector)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Semantic PII detector unavailable; regex protection remains active: %s", exc)
+        return
+    gateway_state.semantic_pii_detector = detector
+    logger.info("Semantic PII detector initialized")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings.backup_dir.mkdir(parents=True, exist_ok=True)
     await audit_log.init_db()
     await containment_store.init_db()
-    yield
+    semantic_task = asyncio.create_task(_initialize_semantic_pii_detector())
+    try:
+        yield
+    finally:
+        if not semantic_task.done():
+            semantic_task.cancel()
 
 
 app = FastAPI(title="Personal Agent Firewall", lifespan=lifespan)

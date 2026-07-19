@@ -1,0 +1,16 @@
+{
+  "name": "personal-agent-firewall-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron analytics and approval console for Personal Agent Firewall",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "smoke": "electron . --smoke-test",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check renderer/app.js && node --check renderer/review.js && node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "electron": "^43.0.0"
+  }
+}

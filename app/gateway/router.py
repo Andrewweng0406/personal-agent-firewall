@@ -546,6 +546,21 @@ def build_router(state: GatewayState) -> APIRouter:
     ) -> dict:
         rows = await state.audit_log.list_events(agent_id, session_id)
         stats = _build_dashboard_stats(rows)
+        codex_rows = await state.audit_log.list_codex_events(
+            session_id=session_id, agent_id=agent_id
+        )
+        chat_stats = _build_chat_dashboard_stats(codex_rows)
+        stats["chat"] = chat_stats
+        stats["total_activity"] = stats["total_events"] + chat_stats["total_events"]
+        stats["posture_counts"] = {
+            "green": stats["lane_counts"]["green"] + chat_stats["posture_counts"]["green"],
+            "yellow": stats["lane_counts"]["yellow"] + chat_stats["posture_counts"]["yellow"],
+            "red": stats["lane_counts"]["red"] + chat_stats["posture_counts"]["red"],
+        }
+        stats["combined_risk_level_counts"] = {
+            level: stats["risk_level_counts"][level] + chat_stats["risk_level_counts"][level]
+            for level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")
+        }
         active_containments = await state.containment_store.list_active(
             agent_id, session_id
         )
@@ -646,4 +661,39 @@ def _build_dashboard_stats(rows: list[dict]) -> dict:
         "auto_contained_events": auto_contained_events,
         "risk_type_counts": risk_types,
         "agents": agent_summaries,
+    }
+
+
+def _build_chat_dashboard_stats(rows: list[dict]) -> dict:
+    """Summarize visible conversation messages without double-counting tool telemetry."""
+    messages = [
+        row for row in rows
+        if row.get("event_type") in {"user_prompt", "assistant_response"}
+    ]
+    event_type_counts = {"user_prompt": 0, "assistant_response": 0}
+    action_counts: dict[str, int] = {}
+    risk_level_counts = {level: 0 for level in ("LOW", "MEDIUM", "HIGH", "CRITICAL")}
+    posture_counts = {lane: 0 for lane in ("green", "yellow", "red")}
+
+    for row in messages:
+        event_type = row.get("event_type") or "unknown"
+        action = row.get("action") or "unknown"
+        level = row.get("risk_level") or "LOW"
+        _increment(event_type_counts, event_type)
+        _increment(action_counts, action)
+        _increment(risk_level_counts, level)
+        posture = "green" if level == "LOW" else "yellow" if level == "MEDIUM" else "red"
+        _increment(posture_counts, posture)
+
+    interventions = sum(
+        count for action, count in action_counts.items()
+        if action in {"deny", "continue"}
+    )
+    return {
+        "total_events": len(messages),
+        "event_type_counts": event_type_counts,
+        "action_counts": action_counts,
+        "risk_level_counts": risk_level_counts,
+        "posture_counts": posture_counts,
+        "interventions": interventions,
     }

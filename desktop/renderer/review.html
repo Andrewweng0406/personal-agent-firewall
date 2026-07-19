@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self';">
+    <title>Approval required</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="review-body">
+    <main class="review-shell">
+      <div class="review-header">
+        <div class="alert-icon">!</div>
+        <div><p class="eyebrow">FIREWALL INTERRUPT</p><h1>Approval required</h1></div>
+      </div>
+      <div class="risk-strip"><span id="review-risk-level">HIGH RISK</span><strong id="review-score">—</strong></div>
+      <section class="review-summary">
+        <p id="review-explanation">Loading request details…</p>
+        <dl>
+          <div><dt>Agent</dt><dd id="review-agent">—</dd></div>
+          <div><dt>Tool</dt><dd id="review-tool">—</dd></div>
+          <div><dt>Intent</dt><dd id="review-intent">—</dd></div>
+        </dl>
+        <div class="args-box"><span>REQUEST DETAILS</span><pre id="review-args">{}</pre></div>
+      </section>
+      <p class="review-warning">Allowing this request may change files or expose sensitive data. Review the details before continuing.</p>
+      <p id="review-error" class="review-error" role="alert"></p>
+      <div class="review-actions">
+        <button id="deny-button" class="deny-button">Reject request</button>
+        <button id="allow-button" class="allow-button">Approve once</button>
+      </div>
+      <button id="open-dashboard" class="text-button">Open full dashboard</button>
+    </main>
+    <script src="review.js"></script>
+  </body>
+</html>

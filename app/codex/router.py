@@ -84,11 +84,14 @@ def build_codex_router(state: GatewayState) -> APIRouter:
 
     @router.get("/events")
     async def list_codex_events(
+        agent_id: str | None = None,
         session_id: str | None = None,
         turn_id: str | None = None,
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict:
-        rows = await state.audit_log.list_codex_events(session_id, turn_id, limit)
+        rows = await state.audit_log.list_codex_events(
+            session_id, turn_id, limit, agent_id=agent_id
+        )
         events = [_decode_codex_row(row) for row in rows]
         return {"events": events, "count": len(events)}
 

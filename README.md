@@ -183,6 +183,24 @@ Override the defaults with `AGENT_FIREWALL_URL`,
 existing Codex event storage/API with a distinct `agent_id`; a future unified
 event schema can migrate both sources without changing the hook contract.
 
+## Install hooks into another project
+
+Use the built-in installer when the target project does not contain this
+repository's checked-in hook configuration:
+
+    python -m integrations.hook_installer install codex --project-dir /path/to/project
+    python -m integrations.hook_installer install claude --project-dir /path/to/project
+
+Inspect or remove the integration with:
+
+    python -m integrations.hook_installer doctor claude --project-dir /path/to/project
+    python -m integrations.hook_installer uninstall claude --project-dir /path/to/project
+
+Pass `--global` instead of `--project-dir` to manage the current user's global
+configuration. Installation merges with existing JSON, creates a timestamped
+backup before changing an existing file, and is idempotent. Uninstall removes
+only entries whose command points to this firewall's hook adapters.
+
 ## API contract
 
 See `docs/frontend-api.md` for the full REST/WebSocket contract used by the

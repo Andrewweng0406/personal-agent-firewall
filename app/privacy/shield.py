@@ -6,6 +6,19 @@ from app.privacy.pii_patterns import redact
 
 SEMANTIC_MATCH_TYPE = "SEMANTIC_MATCH"
 _SEMANTIC_REDACTION = "[REDACTED:SEMANTIC_MATCH]"
+SENSITIVE_FIELD_TYPE = "SENSITIVE_FIELD"
+_SENSITIVE_FIELDS = {
+    "authorization",
+    "cookie",
+    "password",
+    "passwd",
+    "secret",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "private_key",
+}
 
 
 def scan_and_redact(value: Any, semantic_detector: Any = None) -> tuple[Any, list[str]]:
@@ -35,7 +48,23 @@ def scan_and_redact(value: Any, semantic_detector: Any = None) -> tuple[Any, lis
                 return _SEMANTIC_REDACTION
             return redacted
         if isinstance(node, dict):
-            return {key: _walk(val) for key, val in node.items()}
+            result = {}
+            for key, val in node.items():
+                normalized_key = str(key).strip().lower().replace("-", "_")
+                sensitive_key = (
+                    normalized_key in _SENSITIVE_FIELDS
+                    or normalized_key.endswith("_password")
+                    or normalized_key.endswith("_secret")
+                    or normalized_key.endswith("_token")
+                    or normalized_key.endswith("_api_key")
+                )
+                if sensitive_key and val not in (None, ""):
+                    if SENSITIVE_FIELD_TYPE not in matched_types:
+                        matched_types.append(SENSITIVE_FIELD_TYPE)
+                    result[key] = "[REDACTED:SENSITIVE_FIELD]"
+                else:
+                    result[key] = _walk(val)
+            return result
         if isinstance(node, list):
             return [_walk(item) for item in node]
         return node

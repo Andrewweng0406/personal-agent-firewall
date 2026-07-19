@@ -78,6 +78,25 @@ def test_semantic_detector_applies_inside_nested_structures():
 
     redacted, matches = scan_and_redact(data, semantic_detector=detector)
 
-    assert redacted["notes"][1]["secret"] == "[REDACTED:SEMANTIC_MATCH]"
+    assert redacted["notes"][1]["secret"] == "[REDACTED:SENSITIVE_FIELD]"
     assert redacted["notes"][0] == "fine"
-    assert matches == ["SEMANTIC_MATCH"]
+    assert matches == ["SENSITIVE_FIELD"]
+
+
+def test_sensitive_field_names_are_redacted_regardless_of_value_format():
+    value = {
+        "authorization": "custom credential without a known prefix",
+        "nested": {
+            "database_password": "correct horse battery staple",
+            "refresh-token": "opaque-value",
+            "safe": "keep this",
+        },
+    }
+
+    redacted, matches = scan_and_redact(value)
+
+    assert redacted["authorization"] == "[REDACTED:SENSITIVE_FIELD]"
+    assert redacted["nested"]["database_password"] == "[REDACTED:SENSITIVE_FIELD]"
+    assert redacted["nested"]["refresh-token"] == "[REDACTED:SENSITIVE_FIELD]"
+    assert redacted["nested"]["safe"] == "keep this"
+    assert "SENSITIVE_FIELD" in matches
